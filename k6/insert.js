@@ -1,6 +1,6 @@
 import http from 'k6/http';
-import { check } from 'k6';
-import { Counter } from 'k6/metrics';
+import { check, sleep } from 'k6';
+import { Counter, Trend } from 'k6/metrics';
 
 const body = open(__ENV.BODY, 'b');
 const rows = parseInt(__ENV.ROWS || '0', 10);
@@ -14,6 +14,7 @@ const gracefulStop = __ENV.GRACEFUL_STOP || '5s';
 
 const rowsAccepted = new Counter('rows_accepted');
 const requestsRefused = new Counter('requests_refused');
+const acceptLatency = new Trend('accept_latency', true);
 
 function scenario() {
   if (mode === 'rate') {
@@ -53,16 +54,21 @@ export default function () {
   const res = http.post(__ENV.URL, body, params);
   if (res.status === expectStatus) {
     rowsAccepted.add(rows);
+    acceptLatency.add(res.timings.duration);
   } else {
     requestsRefused.add(1);
+    if (res.status === 429) {
+      const retryAfter = parseFloat(res.headers['Retry-After']);
+      sleep(Math.min(isNaN(retryAfter) ? 0.5 : retryAfter, 2));
+    }
   }
   check(res, { 'expected status': (r) => r.status === expectStatus });
 }
 
 export function handleSummary(data) {
   const durationS = data.state.testRunDurationMs / 1000;
-  const latency = data.metrics.http_req_duration
-    ? data.metrics.http_req_duration.values
+  const latency = data.metrics.accept_latency
+    ? data.metrics.accept_latency.values
     : {};
   const accepted = data.metrics.rows_accepted
     ? data.metrics.rows_accepted.values.count
