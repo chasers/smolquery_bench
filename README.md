@@ -84,7 +84,8 @@ tools/watch/      CPU/RSS sampler (ps-based) for server + k6
 k6/insert.js      closed-loop (VUS) or open-loop (RATE) load script
 schemas/          smolquery table-create JSON + ClickHouse MergeTree DDL
 scripts/          setup / run / sweep / stop / report
-results/raw/      per-run k6 + watch JSON
+results/raw/      per-run k6 + watch JSON (gitignored)
+results/*.md      dated baseline writeups
 ```
 
 ## Reference numbers
@@ -93,3 +94,7 @@ From load-rig's published run (M1 Pro, 10 cores, 16 GB):
 smolquery DuckDB writer peaked at **383,157 rows/s** (32 VU, pool=4, enc=4)
 vs ClickHouse's **165,814 rows/s** with matching fsync durability. New results
 should land in that ballpark; investigate before publishing if they don't.
+
+Measured baselines from this harness live in `results/` — see
+[results/2026-08-10-baseline.md](results/2026-08-10-baseline.md), where
+ClickHouse ran well above its reference numbers (unresolved).

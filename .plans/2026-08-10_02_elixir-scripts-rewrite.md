@@ -25,11 +25,11 @@ for daemonizing servers).
 1. [x] `scripts/bench.exs` with all modules.
 2. [x] Seven entry scripts, chmod +x.
 3. [x] Verify: `gen-bodies.exs` output byte-identical to existing body file
-       (same seed); `report.exs` against `results/aborted-2026-08-10-os-update/`
-       (also fixes jq's crash on null latency in dead runs); smoke runs passed —
+       (same seed); `report.exs` output matches the bash report (and prints
+       `-` where jq crashed on null latency); smoke runs passed —
        clickhouse 263k rows/s @4VU/5s, smolquery 221k rows/s @16VU/5s, watch
        pattern now excludes ElixirLS.
 4. [x] Delete `scripts/*.sh` (`git rm -f`), update README, `mix format`.
-5. [ ] Relaunch the wait-for-quiet + full-sweep background job on the
-       Elixir scripts (context: first baseline attempt was aborted by a
-       macOS update; see plan 2026-08-10_01, item 9).
+5. [x] Run the baseline sweeps (wait-for-quiet + both arms) on the Elixir
+       scripts. Completed 13:27; results and anomalies recorded in plan _01
+       item 9 and `results/2026-08-10-baseline.md`.

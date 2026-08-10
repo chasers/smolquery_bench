@@ -131,17 +131,30 @@ saved under `results/raw/`.
        smolquery 11,063 rows/s p50 1,106 ms at 4 VUs (ack-latency-bound below
        the 32 MiB byte trigger — expected) and 244,077 rows/s p50 172 ms at
        16 VUs, in line with the reference's 231,898–306,733.
-9. [ ] Baseline session: full sweep both arms, sanity-check against reference
+9. [x] Baseline session: full sweep both arms, sanity-check against reference
        numbers (smolquery ≈ 2× ClickHouse-with-fsync at peak). Investigate if
        we're far off before publishing.
-   - First attempt (2026-08-10 ~11:54–12:02) aborted: a macOS update landed
-     mid-sweep. smolquery vus1/vus4 looked normal, vus8/vus32 had the server
-     frozen (0 rows accepted), vus16 came in low (147,739 rows/s) with huge
-     refusal counts. ClickHouse arm never ran. Raw files preserved under
-     `results/aborted-2026-08-10-os-update/`.
-   - Found + fixed during post-mortem: the watcher's `beam.smp` pattern also
+   - Harness fix along the way: the watcher's `beam.smp` pattern also
      matched VS Code's ElixirLS BEAM (430 MB RSS), polluting every server
-     CPU/RSS stat. `run-arm.sh` now matches `beam\.smp.*mix run --no-halt`.
+     CPU/RSS stat; it now matches `beam\.smp.*mix run --no-halt`.
+   - Full writeup: `results/2026-08-10-baseline.md`.
+   - Baseline (2026-08-10 12:59–13:27, Elixir scripts) completed both
+     arms cleanly. Peaks: smolquery 254,240 rows/s @16VU (0 refused);
+     ClickHouse-fsync 439,836 @32VU / 377,606 @16VU / 264,832 @4VU.
+     Two deviations from the reference to investigate before publishing:
+     - smolquery @32VU collapsed to 78,586 rows/s with 353,320 refusals
+       (429 buffer_full: 32 VUs × 6.74 MiB ≈ 215 MiB in flight vs
+       MAX_BUFFERED_BYTES=128 MiB; the new retry-after backoff also lowers
+       offered load vs load-rig's immediate-retry behavior). Confirmed by
+       diagnostic: `smolquery-vus32-buf256` (MAX_BUFFERED_BYTES=256 MiB) did
+       306,287 rows/s, 0 refused, p50 302 ms, server CPU avg 468% — the
+       32VU baseline row measures the buffer cap, not the writer. Publish
+       either with the 256 MiB cap denoted as tuning, or keep 16VU as the
+       128 MiB-config peak.
+     - ClickHouse-fsync is ~1.6–2.7× the reference arm at every VU level
+       (264,832 @4VU vs reference 165,814), so smolquery no longer leads at
+       peak on this machine (M-series 10 cores / 64 GB, CH 26.7.3). Needs a
+       closer look (newer ClickHouse, more RAM) before publishing claims.
 
 ## Out of scope (for now)
 
