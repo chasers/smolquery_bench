@@ -11,29 +11,30 @@ against ClickHouse, as fairly as possible, modeled on
 
 - macOS with [k6](https://k6.io) and ClickHouse: `brew install k6 clickhouse`
 - Go (for the body generator and the process watcher)
+- Elixir 1.18+ (the scripts are Elixir; smolquery requires it anyway)
 - A smolquery checkout with compiled deps (default `~/Dev/supabase/smolquery`,
   override with `SMOLQUERY_DIR`)
 
 ## Quick start
 
 ```sh
-scripts/gen-bodies.sh                 # bodies/eachrow.3062.ndjson, seed 42
+scripts/gen-bodies.exs                # bodies/eachrow.3062.ndjson, seed 42
 
-scripts/setup-smolquery.sh           # cold data dir, server, dataset + table + clustering
-scripts/run-arm.sh smolquery         # preflight → 20s warm-up → 15s pause → 60s measured
+scripts/setup-smolquery.exs          # cold data dir, server, dataset + table + clustering
+scripts/run-arm.exs smolquery        # preflight → 20s warm-up → 15s pause → 60s measured
 
-scripts/setup-clickhouse.sh          # cold path, server, table, fsync settings
-scripts/run-arm.sh clickhouse
+scripts/setup-clickhouse.exs         # cold path, server, table, fsync settings
+scripts/run-arm.exs clickhouse
 
-scripts/report.sh                    # markdown table from results/raw/
-scripts/stop.sh                      # stop both servers
+scripts/report.exs                   # markdown table from results/raw/
+scripts/stop.exs                     # stop both servers
 ```
 
 Full VU sweep (cold table before every run):
 
 ```sh
-scripts/sweep.sh smolquery           # VUS_LIST="1 4 8 16 32" by default
-scripts/sweep.sh clickhouse
+scripts/sweep.exs smolquery          # VUS_LIST="1 4 8 16 32" by default
+scripts/sweep.exs clickhouse
 ```
 
 Knobs (env vars): `VUS`, `MODE=rate RATE=30` (open loop), `DURATION_S`,
@@ -50,7 +51,7 @@ threshold for its low-VU rows for exactly this reason.
 
 ## Fairness rules (equal across arms)
 
-- Identical NDJSON bodies from one deterministic `gen-bodies.sh` run.
+- Identical NDJSON bodies from one deterministic `gen-bodies.exs` run.
 - Cold table each run: data directory erased, server restarted.
 - One server at a time; k6 runs on the same machine (shared caveat — the
   watcher reports k6's CPU so contention is visible).
@@ -60,6 +61,9 @@ threshold for its low-VU rows for exactly this reason.
 - Same clustering/sort key on both: `(project_id, timestamp)`.
 - Protocol per run: preflight insert (fails on `insertErrors`), 20 s warm-up,
   15 s pause, 60 s measured, 5 s graceful stop.
+- Backpressure: a 429 (smolquery's `buffer_full`) sleeps out the response's
+  `retry-after` (capped at 2 s) before the VU retries. Latency percentiles
+  are computed over accepted requests only; refusals are counted separately.
 
 ## Known asymmetries (denoted, not hidden)
 

@@ -57,14 +57,14 @@ smolquery_bench/
   schemas/
     otel_logs.smolquery.json   # table-create payload
     otel_logs.clickhouse.sql   # equivalent MergeTree DDL
-  scripts/
-    gen-bodies.sh        # build eachrow.N.ndjson with fixed seed
-    setup-smolquery.sh   # fresh SMOLQUERY_DATA_DIR, start server, create dataset/table + clustering
-    setup-clickhouse.sh  # fresh data dir, start server, create table, apply fsync settings
-    run-arm.sh           # preflight → warm-up → pause → measured run with watch, writes JSON
-    sweep.sh             # runs the full VU matrix for one target
-    stop.sh              # stop a running server
-    report.sh            # markdown table from results/raw/*.json
+  scripts/               # Elixir scripts since 2026-08-10 (bench.exs = shared lib; see plan _02)
+    gen-bodies.exs       # build eachrow.N.ndjson with fixed seed
+    setup-smolquery.exs  # fresh SMOLQUERY_DATA_DIR, start server, create dataset/table + clustering
+    setup-clickhouse.exs # fresh data dir, start server, create table, apply fsync settings
+    run-arm.exs          # preflight → warm-up → pause → measured run with watch, writes JSON
+    sweep.exs            # runs the full VU matrix for one target
+    stop.exs             # stop a running server
+    report.exs           # markdown table from results/raw/*.json
   results/raw/         # per-run k6 + watch JSON
   README.md
 ```
@@ -134,6 +134,14 @@ saved under `results/raw/`.
 9. [ ] Baseline session: full sweep both arms, sanity-check against reference
        numbers (smolquery ≈ 2× ClickHouse-with-fsync at peak). Investigate if
        we're far off before publishing.
+   - First attempt (2026-08-10 ~11:54–12:02) aborted: a macOS update landed
+     mid-sweep. smolquery vus1/vus4 looked normal, vus8/vus32 had the server
+     frozen (0 rows accepted), vus16 came in low (147,739 rows/s) with huge
+     refusal counts. ClickHouse arm never ran. Raw files preserved under
+     `results/aborted-2026-08-10-os-update/`.
+   - Found + fixed during post-mortem: the watcher's `beam.smp` pattern also
+     matched VS Code's ElixirLS BEAM (430 MB RSS), polluting every server
+     CPU/RSS stat. `run-arm.sh` now matches `beam\.smp.*mix run --no-halt`.
 
 ## Out of scope (for now)
 
