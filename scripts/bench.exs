@@ -231,6 +231,12 @@ defmodule Bench.Smolquery do
       {"SMOLQUERY_FLUSH_WRITER", Bench.env("FLUSH_WRITER", "duckdb")}
     ]
 
+    server_env =
+      case System.get_env("WRITE_ENGINE_THREADS") do
+        nil -> server_env
+        threads -> server_env ++ [{"SMOLQUERY_WRITE_ENGINE_THREADS", threads}]
+      end
+
     File.mkdir_p!(run_dir)
     Bench.stop_arm("smolquery")
 

@@ -39,8 +39,10 @@ scripts/sweep.exs clickhouse
 
 Knobs (env vars): `VUS`, `MODE=rate RATE=30` (open loop), `DURATION_S`,
 `WARMUP_S`, `ROWS`, `SEED`; smolquery tuning via `FLUSH_MAX_BYTES`,
-`FLUSH_INTERVAL_MS`, `WRITE_POOL_SIZE`, `ENCODE_CONCURRENCY`; ClickHouse
-durability via `FSYNC=0`. Servers log to `/tmp/sqbench/`.
+`FLUSH_INTERVAL_MS`, `WRITE_POOL_SIZE`, `ENCODE_CONCURRENCY`,
+`WRITE_ENGINE_THREADS` (DuckDB threads per pool member; unset = smolquery
+divides its engine threads across the pool); ClickHouse durability via
+`FSYNC=0`. Servers log to `/tmp/sqbench/`.
 
 Reading low-VU smolquery numbers: group commit acks when either
 `FLUSH_MAX_BYTES` accumulates or `FLUSH_INTERVAL_MS` elapses. At the default
