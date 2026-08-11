@@ -1,4 +1,5 @@
 bodies/
 bin/
 results/raw/
+results/raw-*/
 .plans/

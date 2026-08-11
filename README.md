@@ -37,8 +37,11 @@ scripts/sweep.exs clickhouse         # cold table before each run
   for an open loop.
 - **smolquery**: `FLUSH_MAX_BYTES`, `FLUSH_INTERVAL_MS`, `WRITE_POOL_SIZE`,
   `ENCODE_CONCURRENCY`, `WRITE_ENGINE_THREADS` (DuckDB threads per pool member;
-  unset means they divide across the pool).
+  unset means they divide across the pool), plus `COMMIT_SIBLINGS` and
+  `FLUSH_IDLE_INTERVAL_MS` on builds that carry the adaptive group-commit wait.
 - **ClickHouse durability**: `FSYNC=0`. Servers log to `/tmp/sqbench/`.
+- **Run naming**: `LABEL_SUFFIX` tags a run, and `RESULTS` sends its JSON to
+  another directory. Use both to keep an A/B out of the baseline raw files.
 
 ## Fairness rules (equal across arms)
 
@@ -92,4 +95,6 @@ fsync. Land in that range, and **investigate a large gap before you publish**.
 Latest measured baseline:
 [results/2026-08-10-baseline.md](results/2026-08-10-baseline.md). ClickHouse runs
 well above its reference here, because fsync costs ~3% on this hardware against
-54% on the reference setup.
+54% on the reference setup. The low-VU floor above is what smolquery
+[PR #124](https://github.com/chasers/smolquery/pull/124) removes — see
+[results/2026-08-11-pr124-adaptive-group-commit.md](results/2026-08-11-pr124-adaptive-group-commit.md).

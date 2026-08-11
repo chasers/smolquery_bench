@@ -232,10 +232,20 @@ defmodule Bench.Smolquery do
     ]
 
     server_env =
-      case System.get_env("WRITE_ENGINE_THREADS") do
-        nil -> server_env
-        threads -> server_env ++ [{"SMOLQUERY_WRITE_ENGINE_THREADS", threads}]
-      end
+      Enum.reduce(
+        [
+          {"WRITE_ENGINE_THREADS", "SMOLQUERY_WRITE_ENGINE_THREADS"},
+          {"COMMIT_SIBLINGS", "SMOLQUERY_COMMIT_SIBLINGS"},
+          {"FLUSH_IDLE_INTERVAL_MS", "SMOLQUERY_FLUSH_IDLE_INTERVAL_MS"}
+        ],
+        server_env,
+        fn {name, server_name}, acc ->
+          case System.get_env(name) do
+            nil -> acc
+            value -> acc ++ [{server_name, value}]
+          end
+        end
+      )
 
     File.mkdir_p!(run_dir)
     Bench.stop_arm("smolquery")
