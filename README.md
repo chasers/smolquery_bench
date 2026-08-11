@@ -76,7 +76,7 @@ threshold for its low-VU rows for exactly this reason.
 | Nullability | all columns nullable | all `Nullable(...)` except the two ordering keys (MergeTree keys cannot be nullable) — note the load-rig reference declared only 4 nullable columns, which favors ClickHouse |
 | Timestamp parsing | ISO 8601 without zone suffix (`2026-08-01T10:00:00.000000`) — the one format both default parsers accept; ClickHouse's `basic` parser rejects a trailing `Z` | same body, default `date_time_input_format=basic` |
 | Platform | BEAM release on macOS | Linux-tuned binary on macOS |
-| Tuning applied | `FLUSH_MAX_BYTES=32MiB`, `WRITE_POOL_SIZE=4`, `ENCODE_CONCURRENCY=4`, `MAX_BUFFERED_BYTES=128MiB` | table-level fsync settings only |
+| Tuning applied | `FLUSH_MAX_BYTES=32MiB`, `WRITE_POOL_SIZE=10`, `ENCODE_CONCURRENCY=10` (= schedulers online), `MAX_BUFFERED_BYTES=128MiB` | table-level fsync settings only |
 
 ## Layout
 
