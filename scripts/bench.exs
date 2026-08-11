@@ -223,7 +223,7 @@ defmodule Bench.Smolquery do
     server_env = [
       {"SMOLQUERY_DATA_DIR", data_dir},
       {"SMOLQUERY_API_KEY", api_key},
-      {"SMOLQUERY_FLUSH_MAX_BYTES", Bench.env("FLUSH_MAX_BYTES", "33554432")},
+      {"SMOLQUERY_FLUSH_MAX_BYTES", Bench.env("FLUSH_MAX_BYTES", "50331648")},
       {"SMOLQUERY_FLUSH_INTERVAL_MS", Bench.env("FLUSH_INTERVAL_MS", "1000")},
       {"SMOLQUERY_MAX_BUFFERED_BYTES", Bench.env("MAX_BUFFERED_BYTES", "134217728")},
       {"SMOLQUERY_WRITE_POOL_SIZE", Bench.env("WRITE_POOL_SIZE", "10")},

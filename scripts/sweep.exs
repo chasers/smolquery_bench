@@ -13,7 +13,7 @@ setup =
     "clickhouse" -> &Bench.Clickhouse.setup/0
   end
 
-vus_list = "VUS_LIST" |> Bench.env("1 4 8 16 32") |> String.split()
+vus_list = "VUS_LIST" |> Bench.env("1 4 8 16 32 64") |> String.split()
 
 Enum.each(vus_list, fn vus ->
   setup.()

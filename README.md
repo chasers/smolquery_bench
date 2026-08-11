@@ -33,7 +33,7 @@ scripts/stop.exs                     # stop both servers
 Full VU sweep (cold table before every run):
 
 ```sh
-scripts/sweep.exs smolquery          # VUS_LIST="1 4 8 16 32" by default
+scripts/sweep.exs smolquery          # VUS_LIST="1 4 8 16 32 64" by default
 scripts/sweep.exs clickhouse
 ```
 
@@ -46,7 +46,7 @@ divides its engine threads across the pool); ClickHouse durability via
 
 Reading low-VU smolquery numbers: group commit acks when either
 `FLUSH_MAX_BYTES` accumulates or `FLUSH_INTERVAL_MS` elapses. At the default
-32 MiB / 1000 ms, closed-loop runs below ~5 VUs never hit the byte trigger, so
+48 MiB / 1000 ms, closed-loop runs below ~5 VUs never hit the byte trigger, so
 p50 sits at ~1 s and throughput is ack-latency-bound — that is the configured
 durability cadence, not a ceiling. The load-rig reference used a 4.5 MB flush
 threshold for its low-VU rows for exactly this reason.
@@ -76,7 +76,7 @@ threshold for its low-VU rows for exactly this reason.
 | Nullability | all columns nullable | all `Nullable(...)` except the two ordering keys (MergeTree keys cannot be nullable) — note the load-rig reference declared only 4 nullable columns, which favors ClickHouse |
 | Timestamp parsing | ISO 8601 without zone suffix (`2026-08-01T10:00:00.000000`) — the one format both default parsers accept; ClickHouse's `basic` parser rejects a trailing `Z` | same body, default `date_time_input_format=basic` |
 | Platform | BEAM release on macOS | Linux-tuned binary on macOS |
-| Tuning applied | `FLUSH_MAX_BYTES=32MiB`, `WRITE_POOL_SIZE=10`, `ENCODE_CONCURRENCY=10` (= schedulers online), `MAX_BUFFERED_BYTES=128MiB` | table-level fsync settings only |
+| Tuning applied | `FLUSH_MAX_BYTES=48MiB`, `WRITE_POOL_SIZE=10`, `ENCODE_CONCURRENCY=10` (= schedulers online), `MAX_BUFFERED_BYTES=128MiB` | table-level fsync settings only |
 
 ## Layout
 
@@ -98,5 +98,6 @@ vs ClickHouse's **165,814 rows/s** with matching fsync durability. New results
 should land in that ballpark; investigate before publishing if they don't.
 
 Measured baselines from this harness live in `results/` — see
-[results/2026-08-10-baseline.md](results/2026-08-10-baseline.md), where
-ClickHouse ran well above its reference numbers (unresolved).
+[results/2026-08-10-baseline.md](results/2026-08-10-baseline.md). ClickHouse
+runs well above its reference numbers here (explained in the writeup: fsync
+costs ~3% on this hardware/version vs 54% on the reference setup).
