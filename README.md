@@ -1,103 +1,95 @@
 # smolquery_bench
 
-Ingest benchmark comparing [smolquery](https://github.com/chasers/smolquery)
-against ClickHouse, as fairly as possible, modeled on
-[abc3/load-rig](https://github.com/abc3/load-rig). Both systems receive the
-**identical NDJSON body** — 3,062 OpenTelemetry log rows × 62 columns
-(~6.4 MiB) — over HTTP: smolquery via `POST …/insert`
-(`application/x-ndjson`), ClickHouse via `INSERT … FORMAT JSONEachRow`.
+Ingest benchmark: [smolquery](https://github.com/chasers/smolquery) against
+ClickHouse, as fairly as possible, following
+[abc3/load-rig](https://github.com/abc3/load-rig). Both arms get the **identical
+NDJSON body** — 3,062 OpenTelemetry log rows × 62 columns, ~6.7 MiB — smolquery
+via `POST …/insert` (`application/x-ndjson`), ClickHouse via
+`INSERT … FORMAT JSONEachRow`.
 
 ## Prerequisites
 
-- macOS with [k6](https://k6.io) and ClickHouse: `brew install k6 clickhouse`
-- Go (for the body generator and the process watcher)
-- Elixir 1.18+ (the scripts are Elixir; smolquery requires it anyway)
-- A smolquery checkout with compiled deps (default `~/Dev/supabase/smolquery`,
-  override with `SMOLQUERY_DIR`)
+macOS with k6 and ClickHouse (`brew install k6 clickhouse`), Go, Elixir 1.18 or
+later, and a smolquery checkout with compiled deps (`SMOLQUERY_DIR`, default
+`~/Dev/supabase/smolquery`).
 
 ## Quick start
 
 ```sh
-scripts/gen-bodies.exs                # bodies/eachrow.3062.ndjson, seed 42
+scripts/gen-bodies.exs               # bodies/eachrow.3062.ndjson, seed 42
 
-scripts/setup-smolquery.exs          # cold data dir, server, dataset + table + clustering
-scripts/run-arm.exs smolquery        # preflight → 20s warm-up → 15s pause → 60s measured
+scripts/setup-smolquery.exs          # cold data dir, server, dataset, table, clustering
+scripts/run-arm.exs smolquery        # preflight, 20s warm-up, 15s pause, 60s measured
 
 scripts/setup-clickhouse.exs         # cold path, server, table, fsync settings
 scripts/run-arm.exs clickhouse
 
 scripts/report.exs                   # markdown table from results/raw/
-scripts/stop.exs                     # stop both servers
+scripts/stop.exs                     # stops both servers
+
+scripts/sweep.exs smolquery          # full VU sweep, VUS_LIST="1 4 8 16 32 64"
+scripts/sweep.exs clickhouse         # cold table before each run
 ```
 
-Full VU sweep (cold table before every run):
+## Knobs
 
-```sh
-scripts/sweep.exs smolquery          # VUS_LIST="1 4 8 16 32 64" by default
-scripts/sweep.exs clickhouse
-```
-
-Knobs (env vars): `VUS`, `MODE=rate RATE=30` (open loop), `DURATION_S`,
-`WARMUP_S`, `ROWS`, `SEED`; smolquery tuning via `FLUSH_MAX_BYTES`,
-`FLUSH_INTERVAL_MS`, `WRITE_POOL_SIZE`, `ENCODE_CONCURRENCY`,
-`WRITE_ENGINE_THREADS` (DuckDB threads per pool member; unset = smolquery
-divides its engine threads across the pool); ClickHouse durability via
-`FSYNC=0`. Servers log to `/tmp/sqbench/`.
-
-Reading low-VU smolquery numbers: group commit acks when either
-`FLUSH_MAX_BYTES` accumulates or `FLUSH_INTERVAL_MS` elapses. At the default
-48 MiB / 1000 ms, closed-loop runs below ~5 VUs never hit the byte trigger, so
-p50 sits at ~1 s and throughput is ack-latency-bound — that is the configured
-durability cadence, not a ceiling. The load-rig reference used a 4.5 MB flush
-threshold for its low-VU rows for exactly this reason.
+- **Load**: `VUS`, `DURATION_S`, `WARMUP_S`, `ROWS`, `SEED`; `MODE=rate RATE=30`
+  for an open loop.
+- **smolquery**: `FLUSH_MAX_BYTES`, `FLUSH_INTERVAL_MS`, `WRITE_POOL_SIZE`,
+  `ENCODE_CONCURRENCY`, `WRITE_ENGINE_THREADS` (DuckDB threads per pool member;
+  unset means they divide across the pool).
+- **ClickHouse durability**: `FSYNC=0`. Servers log to `/tmp/sqbench/`.
 
 ## Fairness rules (equal across arms)
 
-- Identical NDJSON bodies from one deterministic `gen-bodies.exs` run.
-- Cold table each run: data directory erased, server restarted.
-- One server at a time; k6 runs on the same machine (shared caveat — the
-  watcher reports k6's CPU so contention is visible).
-- Durability parity: ClickHouse runs with `async_insert` off (default) plus
-  `fsync_after_insert = 1, fsync_part_directory = 1`, matching smolquery's
-  fsync-before-200. `FSYNC=0` gives the weaker page-cache-only arm.
-- Same clustering/sort key on both: `(project_id, timestamp)`.
-- Protocol per run: preflight insert (fails on `insertErrors`), 20 s warm-up,
-  15 s pause, 60 s measured, 5 s graceful stop.
-- Backpressure: a 429 (smolquery's `buffer_full`) sleeps out the response's
-  `retry-after` (capped at 2 s) before the VU retries. Latency percentiles
-  are computed over accepted requests only; refusals are counted separately.
+- Identical bodies from one deterministic `gen-bodies.exs` run.
+- Cold table each run: data dir erased, server restarted.
+- One server at a time; k6 shares the machine, and the watcher reports its CPU.
+- Durability parity: `async_insert` off (default) plus `fsync_after_insert = 1`
+  and `fsync_part_directory = 1`, to match how smolquery fsyncs before a 200.
+  `FSYNC=0` is the weaker page-cache-only arm.
+- Same sort key on both: `(project_id, timestamp)`.
+- Per run: preflight (fails on `insertErrors`), 20 s warm-up, 15 s pause, 60 s
+  measured, 5 s stop.
+- On a 429 (`buffer_full`) the VU sleeps out `retry-after`, up to 2 s.
+  Percentiles cover accepted requests; refusals count separately.
+
+## How to read the low-VU smolquery numbers
+
+Group commit acks on the first trigger: 48 MiB (`FLUSH_MAX_BYTES`) or 1,000 ms
+(`FLUSH_INTERVAL_MS`). Below ~5 VUs a closed loop never reaches the byte trigger,
+so p50 sits near 1 s — **the configured durability cadence, not a ceiling**.
 
 ## Known asymmetries (denoted, not hidden)
 
 | Dimension | smolquery | ClickHouse |
 |---|---|---|
-| What a 200 means | manifest fsynced, rows queryable | part fsynced (with the settings above) |
-| Row validation | deferred to flush; failed batches salvaged row by row | parses/validates every JSONEachRow row inline |
-| Nullability | all columns nullable | all `Nullable(...)` except the two ordering keys (MergeTree keys cannot be nullable) — note the load-rig reference declared only 4 nullable columns, which favors ClickHouse |
-| Timestamp parsing | ISO 8601 without zone suffix (`2026-08-01T10:00:00.000000`) — the one format both default parsers accept; ClickHouse's `basic` parser rejects a trailing `Z` | same body, default `date_time_input_format=basic` |
+| What a 200 means | Manifest fsynced, rows queryable | Part fsynced, with the settings above |
+| Row validation | Deferred to the flush; a failed batch is salvaged row by row | Every JSONEachRow row parsed inline |
+| Nullability | Every column nullable | Every column except the two ordering keys, since MergeTree keys cannot be nullable — load-rig declared only 4, which favors ClickHouse |
+| Timestamp parsing | ISO 8601 without a zone suffix (`2026-08-01T10:00:00.000000`), the one format both default parsers accept; the `basic` parser rejects a trailing `Z` | Same body, default `date_time_input_format=basic` |
 | Platform | BEAM release on macOS | Linux-tuned binary on macOS |
-| Tuning applied | `FLUSH_MAX_BYTES=48MiB`, `WRITE_POOL_SIZE=10`, `ENCODE_CONCURRENCY=10` (= schedulers online), `MAX_BUFFERED_BYTES=128MiB` | table-level fsync settings only |
+| Tuning applied | `FLUSH_MAX_BYTES=48MiB`, `WRITE_POOL_SIZE=10`, `ENCODE_CONCURRENCY=10` (schedulers online), `MAX_BUFFERED_BYTES=128MiB` | Table-level fsync settings only |
 
 ## Layout
 
 ```
 tools/genbody/    deterministic 62-column OTel NDJSON generator
-tools/watch/      CPU/RSS sampler (ps-based) for server + k6
-k6/insert.js      closed-loop (VUS) or open-loop (RATE) load script
-schemas/          smolquery table-create JSON + ClickHouse MergeTree DDL
-scripts/          setup / run / sweep / stop / report
-results/raw/      per-run k6 + watch JSON (gitignored)
+tools/watch/      CPU and RSS sampler, ps-based, for the server and k6
+k6/insert.js      load script, closed loop (VUS) or open loop (RATE)
+schemas/          smolquery table-create JSON, ClickHouse MergeTree DDL
+scripts/          setup, run, sweep, stop, report
+results/raw/      k6 and watch JSON per run (gitignored)
 results/*.md      dated baseline writeups
 ```
 
 ## Reference numbers
 
-From load-rig's published run (M1 Pro, 10 cores, 16 GB):
-smolquery DuckDB writer peaked at **383,157 rows/s** (32 VU, pool=4, enc=4)
-vs ClickHouse's **165,814 rows/s** with matching fsync durability. New results
-should land in that ballpark; investigate before publishing if they don't.
+load-rig, on an M1 Pro with 10 cores and 16 GB: smolquery peaked at **383,157
+rows/s** (32 VU, pool=4, enc=4), ClickHouse at **165,814 rows/s** with matching
+fsync. Land in that range, and **investigate a large gap before you publish**.
 
-Measured baselines from this harness live in `results/` — see
-[results/2026-08-10-baseline.md](results/2026-08-10-baseline.md). ClickHouse
-runs well above its reference numbers here (explained in the writeup: fsync
-costs ~3% on this hardware/version vs 54% on the reference setup).
+Latest measured baseline:
+[results/2026-08-10-baseline.md](results/2026-08-10-baseline.md). ClickHouse runs
+well above its reference here, because fsync costs ~3% on this hardware against
+54% on the reference setup.
