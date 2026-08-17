@@ -9,9 +9,17 @@ via `POST …/insert` (`application/x-ndjson`), ClickHouse via
 
 ## Prerequisites
 
-macOS with k6 and ClickHouse (`brew install k6 clickhouse`), Go, Elixir 1.18 or
+macOS with k6 and ClickHouse (`brew install k6 clickhouse`), Go, Elixir 1.20 or
 later, and a smolquery checkout with compiled deps (`SMOLQUERY_DIR`, default
 `~/Dev/supabase/smolquery`).
+
+**Every result in this repo was measured on Erlang/OTP 29.** On 2026-08-17 OTP
+27.3.4.6 measured **6.2% faster** at 1 VU, with non-overlapping ranges, and it
+did not hit the SIGBUS crash in six runs. **The next real local bench should move
+to OTP 27 — but the switch has not been made**, because it needs its own
+re-baseline rather than a quiet change mid-investigation. Never mix OTP 27 and
+OTP 29 numbers in one table, and say which OTP produced a published figure. See
+[results/2026-08-17-otp-27-vs-29.md](results/2026-08-17-otp-27-vs-29.md).
 
 ## Quick start
 

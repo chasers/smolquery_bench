@@ -108,9 +108,17 @@ weigh:
 
 ## Caveats
 
+- **Every number in this file is a 30 s run. Do not compare them with the 60 s
+  runs elsewhere in this repo.** A 30 s window reads consistently high, because it
+  captures more of the fast phase before refusals build. At 64 VU the same
+  configuration measured 383,680 rows/s over 30 s and 327,068 over 60 s — a 17%
+  gap from run length alone. The A/B arms compare with each other and with
+  nothing else.
 - One 30 s run per arm. That carries more variance than the ±3–4% of a 60 s run.
   `fmb16` landing below `fmb24` is out of order and shows it. Read the table as
   "every arm beats the control by 33–68%", not as a ranking.
+- Measured on Erlang/OTP 29.0.2, which on 2026-08-17 measured 6.2% slower than
+  OTP 27 at 1 VU. That affects every arm alike, so the comparison holds.
 - The ClickHouse comparison uses this morning's 258,249 rows/s at 8 VU, measured
   with the slower k6 stamp. It is a reference point, not a matched control.
 - These runs use the byte-patch k6 stamp landed the same day, so they do not
