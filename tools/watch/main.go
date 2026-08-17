@@ -143,8 +143,9 @@ sampling:
 	}
 
 	payload := map[string]any{
-		"interval_s": interval.Seconds(),
-		"processes":  summarize(all),
+		"inserted_at": time.Now().UTC().Format(time.RFC3339),
+		"interval_s":  interval.Seconds(),
+		"processes":   summarize(all),
 	}
 	blob, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
