@@ -77,7 +77,14 @@ type row struct {
 	ThreadName             string  `json:"thread_name"`
 	LogFilePath            string  `json:"log_file_path"`
 	Sampled                bool    `json:"sampled"`
+	InsertedAt             string  `json:"inserted_at"`
 }
+
+// insertedAtPlaceholder is substituted with the send time by whatever posts
+// the body — k6/insert.js per request, and the preflight in scripts/bench.exs.
+// It is exactly 26 characters, matching the zone-less microsecond format the
+// other timestamp columns use — both default parsers reject a trailing Z.
+const insertedAtPlaceholder = "____INSERTED_AT___________"
 
 var (
 	services  = []string{"checkout-api", "cart-api", "catalog-api", "payments-api", "auth-api"}
@@ -122,6 +129,24 @@ func uuid(r *rand.Rand) string {
 
 func iso(t time.Time) string {
 	return t.UTC().Format("2006-01-02T15:04:05.000000")
+}
+
+// resolveBase returns the first timestamp of the generated rows. An empty
+// date means today at 10:00 UTC, so a body carries the date of the run that
+// generates it. An explicit YYYY-MM-DD backdates the body, which is how a
+// partitioned table gets rows in more than one date partition.
+func resolveBase(date string) (time.Time, error) {
+	if date == "" {
+		now := time.Now().UTC()
+		return time.Date(now.Year(), now.Month(), now.Day(), 10, 0, 0, 0, time.UTC), nil
+	}
+
+	day, err := time.Parse("2006-01-02", date)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("base-date %q is not YYYY-MM-DD: %w", date, err)
+	}
+
+	return time.Date(day.Year(), day.Month(), day.Day(), 10, 0, 0, 0, time.UTC), nil
 }
 
 func generate(r *rand.Rand, base time.Time, i, projects int) row {
@@ -247,6 +272,7 @@ func generate(r *rand.Rand, base time.Time, i, projects int) row {
 		ThreadName:             fmt.Sprintf("worker-%d", r.Intn(64)),
 		LogFilePath:            "/var/log/app/" + service + ".log",
 		Sampled:                r.Float64() < 0.95,
+		InsertedAt:             insertedAtPlaceholder,
 	}
 }
 
@@ -255,6 +281,7 @@ func main() {
 	projects := flag.Int("projects", 1000, "project_id cardinality")
 	seed := flag.Int64("seed", 42, "PRNG seed for reproducible bodies")
 	out := flag.String("out", "", "output file path (required)")
+	baseDate := flag.String("base-date", "", "timestamp date as YYYY-MM-DD (default: today UTC)")
 	flag.Parse()
 
 	if *out == "" {
@@ -273,7 +300,11 @@ func main() {
 	w := bufio.NewWriterSize(f, 1<<20)
 	enc := json.NewEncoder(w)
 	r := rand.New(rand.NewSource(*seed))
-	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+
+	base, err := resolveBase(*baseDate)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	for i := 0; i < *rows; i++ {
 		if err := enc.Encode(generate(r, base, i, *projects)); err != nil {

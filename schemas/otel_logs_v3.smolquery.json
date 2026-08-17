@@ -1,5 +1,5 @@
 {
-  "id": "otel_logs",
+  "id": "otel_logs_v3",
   "schema": [
     {"name": "project_id", "type": "STRING"},
     {"name": "timestamp", "type": "TIMESTAMP"},

@@ -1,4 +1,4 @@
-CREATE TABLE bench.otel_logs
+CREATE TABLE IF NOT EXISTS bench.otel_logs_v3
 (
     project_id                String,
     timestamp                 DateTime64(6),
@@ -62,7 +62,8 @@ CREATE TABLE bench.otel_logs
     thread_name               Nullable(String),
     log_file_path             Nullable(String),
     sampled                   Nullable(Bool),
-    inserted_at               Nullable(DateTime64(6))
+    inserted_at               DateTime64(6)
 )
 ENGINE = MergeTree
+PARTITION BY toDate(inserted_at)
 ORDER BY (project_id, timestamp)
