@@ -11,6 +11,10 @@ rows/s sealed**, zero refusals, ordinary requests, no client batching. That is
 **An evening of partition/claim sweeping was measuring which shapes fit in
 2 GiB.** The ranking inverted once the budget rose.
 
+**Small rows: 3,461,443 rows/s at 32 VUs, zero refusals, seal at parity.**
+133-byte kv rows against `kv_v1`, same tuning. In wire bytes it is the same
+~500 MiB/s ceiling the otel record hits — the cluster is byte-bound.
+
 ## The winning configuration
 
     WRITE_PARTITIONS=3 · MAX_LIVE_CLAIMS=8 · STORAGE_MEMORY_LIMIT=3584MiB
@@ -41,7 +45,7 @@ rows/s sealed**, zero refusals, ordinary requests, no client batching. That is
 Storage connections share one DuckDB instance — one `memory_limit`, one buffer
 pool. **Size it against merges in flight, not per merge.**
 
-## The six things we know
+## The seven things we know
 
 1. **Memory is the seal ceiling**, not partitions, claims, or commit size.
    At 3584MiB it is still not binding at 96 VUs — the cliff is unlocated.
@@ -55,6 +59,10 @@ pool. **Size it against merges in flight, not per merge.**
    parallelism; `flush_max_bytes` only binds above ~160k rows/s per ref.
 6. **The spill mechanism is unproven.** All `/spill` bytes belong to the
    compaction engine; the seal engine's directories are empty.
+7. **The ingest ceiling is wire bytes, not rows.** Small (133 B) and wide
+   (~2.2 KB) rows both top out near ~500 MiB/s; rows/s is that budget divided
+   by row width. Past the knee, extra VUs buy latency and 429s — the buffer
+   pods pin their 4,096 MB limit either way.
 
 ## Open blockers
 
@@ -82,7 +90,8 @@ T-333 and T-335 are **done** and deployed.
   ambiguity produced three wrong models in one day.
 - **Single-run `seal:commit` ratios are approximate** - the same settings read
   0.427 and 0.326. Prefer the direction of a change over its magnitude.
-- **All cluster numbers are 3-minute windows.** Not soak results.
+- **All cluster numbers are short windows** — 60 s for the kv sweep, 3 min
+  for the otel runs. Not soak results.
 - **Every number in this repo used OTP 29.** OTP 27 measured 6.2% faster at
   1 VU. Do not mix the two in one table.
 - **Read `memory.stat` anon, not `memory.current`** - the latter includes page
@@ -111,6 +120,9 @@ Also open:
 
 ### 2026-08-21
 
+- [kv-small-rows-ceiling](2026-08-21-kv-small-rows-ceiling.md) — 133-byte
+  rows ingest at **3.46M rows/s** (32 VUs, zero refusals, seal at parity).
+  In wire bytes, small and wide rows share one ~500 MiB/s ceiling.
 - [memory-is-the-seal-ceiling](2026-08-21-memory-is-the-seal-ceiling.md)
   — **current state.** The merge engine's memory budget was the ceiling.
   Parity at 96 VUs: 251,621 sealed rows/s, 3.7x the morning baseline.

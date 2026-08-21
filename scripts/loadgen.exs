@@ -46,7 +46,7 @@ defmodule Bench.Loadgen do
   defp instance_type, do: Bench.env("LOADGEN_INSTANCE_TYPE", "c7i.2xlarge")
   defp rows, do: Bench.env("ROWS", "3062")
 
-  defp body_file, do: "bodies/eachrow.#{rows()}.ndjson"
+  defp body_file, do: "bodies/#{Bench.body_name(Bench.shape(), rows())}"
 
   defp vus_list, do: Bench.env("VUS_LIST", "8 16 32 64 128") |> String.split()
   defp duration_s, do: Bench.env("DURATION_S", "30")
@@ -382,7 +382,7 @@ defmodule Bench.Loadgen do
     cd #{remote_dir()}
     export PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPATH=/opt/go GOCACHE=/opt/go/cache
     go build -o genbody ./tools/genbody
-    ./genbody -rows #{rows()} -projects 1000 -seed 42#{base_date} -out #{body_file()}
+    ./genbody -shape #{Bench.shape()} -rows #{rows()} -projects 1000 -seed 42#{base_date} -out #{body_file()}
     ls -l #{body_file()}
     """)
   end

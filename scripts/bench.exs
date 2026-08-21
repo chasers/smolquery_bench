@@ -21,6 +21,17 @@ defmodule Bench do
   def table, do: env("TABLE", "otel_logs_v3")
 
   @doc """
+  The body's row shape: `otel` (63 columns, the default) or `kv`
+  (`key`, `timestamp`, `value`, `inserted_at`). The otel body keeps its
+  historical `eachrow.<rows>.ndjson` name; other shapes name the file
+  after the shape.
+  """
+  def shape, do: env("SHAPE", "otel")
+
+  def body_name("otel", rows), do: "eachrow.#{rows}.ndjson"
+  def body_name(shape, rows), do: "#{shape}.#{rows}.ndjson"
+
+  @doc """
   The clustering key sent to smolquery, as a JSON array string.
 
   `otel_logs_v3` clusters by `project_id` alone, `otel_logs_v4` by
@@ -69,6 +80,7 @@ defmodule Bench do
   defp default_clustering("otel_logs_v31"), do: ["project_id", "inserted_at"]
   defp default_clustering("otel_logs_v32"), do: ["project_id", "inserted_at"]
   defp default_clustering("otel_logs_v33"), do: ["project_id", "inserted_at"]
+  defp default_clustering("kv_v1"), do: ["key", "inserted_at"]
   defp default_clustering(_table), do: ["project_id", "timestamp"]
 
   @bench_types ~w(ingest pruning compaction)
@@ -241,11 +253,14 @@ defmodule Bench.Genbody do
     projects = Bench.env("PROJECTS", "1000")
     seed = Bench.env("SEED", "42")
     base_date = Bench.env("BASE_DATE", "")
+    shape = Bench.shape()
 
     args =
       [
         "run",
         "./tools/genbody",
+        "-shape",
+        shape,
         "-rows",
         rows,
         "-projects",
@@ -253,7 +268,7 @@ defmodule Bench.Genbody do
         "-seed",
         seed,
         "-out",
-        Path.join(out_dir, "eachrow.#{rows}.ndjson")
+        Path.join(out_dir, Bench.body_name(shape, rows))
       ] ++ if base_date == "", do: [], else: ["-base-date", base_date]
 
     Bench.stream!("go", args, cd: Bench.root())

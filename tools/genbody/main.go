@@ -86,6 +86,24 @@ type row struct {
 // other timestamp columns use — both default parsers reject a trailing Z.
 const insertedAtPlaceholder = "____INSERTED_AT___________"
 
+type kvRow struct {
+	Key        string `json:"key"`
+	Timestamp  string `json:"timestamp"`
+	Value      string `json:"value"`
+	InsertedAt string `json:"inserted_at"`
+}
+
+var kvNames = []string{"cart.items", "cache.hits", "queue.depth", "session.count", "request.bytes"}
+
+func generateKV(r *rand.Rand, base time.Time, i, projects int) kvRow {
+	return kvRow{
+		Key:        fmt.Sprintf("proj_%04d:%s", r.Intn(projects), pick(r, kvNames)),
+		Timestamp:  iso(base.Add(time.Duration(i) * 317 * time.Microsecond)),
+		Value:      fmt.Sprintf("%d", r.Intn(1_000_000)),
+		InsertedAt: insertedAtPlaceholder,
+	}
+}
+
 var (
 	services  = []string{"checkout-api", "cart-api", "catalog-api", "payments-api", "auth-api"}
 	routes    = []string{"/v1/checkout", "/v1/cart", "/v1/cart/:id", "/v1/catalog/items", "/v1/auth/token"}
@@ -282,10 +300,14 @@ func main() {
 	seed := flag.Int64("seed", 42, "PRNG seed for reproducible bodies")
 	out := flag.String("out", "", "output file path (required)")
 	baseDate := flag.String("base-date", "", "timestamp date as YYYY-MM-DD (default: today UTC)")
+	shape := flag.String("shape", "otel", "row shape: otel (63 columns) or kv (key, timestamp, value)")
 	flag.Parse()
 
 	if *out == "" {
 		log.Fatal("-out is required")
+	}
+	if *shape != "otel" && *shape != "kv" {
+		log.Fatalf("-shape must be otel or kv, got %q", *shape)
 	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		log.Fatal(err)
@@ -307,8 +329,14 @@ func main() {
 	}
 
 	for i := 0; i < *rows; i++ {
-		if err := enc.Encode(generate(r, base, i, *projects)); err != nil {
-			log.Fatal(err)
+		var encodeErr error
+		if *shape == "kv" {
+			encodeErr = enc.Encode(generateKV(r, base, i, *projects))
+		} else {
+			encodeErr = enc.Encode(generate(r, base, i, *projects))
+		}
+		if encodeErr != nil {
+			log.Fatal(encodeErr)
 		}
 	}
 	if err := w.Flush(); err != nil {

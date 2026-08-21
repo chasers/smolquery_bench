@@ -201,6 +201,11 @@ inlines them, so edit those files rather than the emitted HTML.
 
 - **Load**: `VUS`, `DURATION_S`, `WARMUP_S`, `ROWS`, `SEED`; `MODE=rate RATE=30`
   for an open loop.
+- **Row shape**: `SHAPE` (default `otel`, the 63-column body). `SHAPE=kv`
+  generates small rows — `key`, `timestamp`, `value`, `inserted_at`, ~133 B/row
+  — as `bodies/kv.<rows>.ndjson`, for table `kv_v1`. Pick `ROWS` so the body
+  size stays comparable: 50,000 kv rows ≈ 6.4 MiB against the 6.87 MiB otel
+  body.
 - **Load spread**: the sweep resolves every ready endpoint of the
   `smolquery-api` Service and gives k6 the whole list. Each VU keeps one pod, so
   VUs spread across the api tier and connections stay alive. `API_POD` pins a
@@ -490,6 +495,7 @@ Adding the column changed the schema, and smolquery answers 409 on a
 | `otel_logs_v11`–`v19` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-20 seal-parity runs (T-333). `v11` carries a retrying compaction failure (T-343) — do not reuse it |
 | `otel_logs_v20`–`v32` | same as v3 | clustering `[project_id, inserted_at]` | one fresh table per run: the 2026-08-20 partition sweep, then the 2026-08-21 memory sweep |
 | `otel_logs_v33` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-21 96-VU parity run — the current record, and the current table |
+| `kv_v1` | `PARTITION BY toDate(inserted_at)`, `ORDER BY (key, inserted_at)` | clustering `[key, inserted_at]` | 4 columns (`key`, `timestamp`, `value`, `inserted_at`), ~133 B/row — the small-row bench, `SHAPE=kv` |
 
 `otel_logs_v3` is what `TABLE` defaults to. It exists to answer one question:
 does a query for a single date read only that date's files?
