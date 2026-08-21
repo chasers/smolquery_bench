@@ -1,6 +1,6 @@
 # Remote sandbox ingest, 2026-08-14
 
-The deployed cluster at `eu-central-1-sandbox.smolquery.com:8443`, driven from a
+The deployed cluster at `<sandbox-host>:8443`, driven from a
 laptop over the public internet.
 
 **Peak: 22,579 rows/s at 16 VUs, zero refusals at every load level**, on 3×

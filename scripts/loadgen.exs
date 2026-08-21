@@ -1,5 +1,6 @@
 #!/usr/bin/env elixir
 Code.require_file("bench.exs", __DIR__)
+Code.require_file("report_html.exs", __DIR__)
 
 defmodule Bench.Loadgen do
   @moduledoc """
@@ -43,6 +44,10 @@ defmodule Bench.Loadgen do
   defp profile, do: Bench.env("AWS_PROFILE", "sandbox")
   defp cluster, do: Bench.env("CLUSTER_NAME", "smolquery-dev")
   defp instance_type, do: Bench.env("LOADGEN_INSTANCE_TYPE", "c7i.2xlarge")
+  defp rows, do: Bench.env("ROWS", "3062")
+
+  defp body_file, do: "bodies/eachrow.#{rows()}.ndjson"
+
   defp vus_list, do: Bench.env("VUS_LIST", "8 16 32 64 128") |> String.split()
   defp duration_s, do: Bench.env("DURATION_S", "30")
   defp warmup_s, do: Bench.env("WARMUP_S", "10")
@@ -377,8 +382,8 @@ defmodule Bench.Loadgen do
     cd #{remote_dir()}
     export PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPATH=/opt/go GOCACHE=/opt/go/cache
     go build -o genbody ./tools/genbody
-    ./genbody -rows 3062 -projects 1000 -seed 42#{base_date} -out bodies/eachrow.3062.ndjson
-    ls -l bodies/eachrow.3062.ndjson
+    ./genbody -rows #{rows()} -projects 1000 -seed 42#{base_date} -out #{body_file()}
+    ls -l #{body_file()}
     """)
   end
 
@@ -526,23 +531,41 @@ defmodule Bench.Loadgen do
 
     File.mkdir_p!(results_dir())
 
+    # Sampling starts before anything touches the cluster, so every run opens
+    # with an idle baseline and the setup work — instance lookup, table setup,
+    # preflight insert — is on the record too.
+    watcher = Bench.WatchMetrics.start(metrics_db())
+
     id = if ingest?, do: instance_id!(), else: nil
 
     if ingest?, do: ingest_preflight(key)
 
     IO.puts("== benches: #{Enum.join(benches, ", ")}")
 
-    Enum.each(benches, fn
-      "ingest" -> run_ingest(id, urls, key)
-      "pruning" -> run_pruning(dataset, table, key)
-      "compaction" -> run_compaction()
+    Enum.each(benches, fn bench ->
+      Bench.WatchMetrics.set_phase(watcher, bench)
+
+      case bench do
+        "ingest" -> run_ingest(id, dataset, table, urls, key, watcher)
+        "pruning" -> run_pruning(dataset, table, key)
+        "compaction" -> run_compaction()
+      end
     end)
+
+    db = Bench.WatchMetrics.stop(watcher)
+
+    Bench.ReportHtml.generate(db)
 
     IO.puts("\n== done → #{results_dir()}")
   end
 
+  defp metrics_db do
+    stamp = DateTime.utc_now() |> Calendar.strftime("%Y%m%dT%H%M%SZ")
+    Bench.WatchMetrics.db_path(results_dir(), "loadgen-#{stamp}#{label_suffix()}")
+  end
+
   defp ingest_preflight(key) do
-    body_path = Path.join(Bench.root(), "bodies/eachrow.3062.ndjson")
+    body_path = Path.join(Bench.root(), body_file())
 
     File.exists?(body_path) ||
       Bench.fatal!("body file missing: #{body_path} (run scripts/gen-bodies.exs)")
@@ -561,7 +584,7 @@ defmodule Bench.Loadgen do
 
   # ── bench: ingest ──────────────────────────────────────────────────────────
 
-  defp run_ingest(id, urls, key) do
+  defp run_ingest(id, dataset, table, urls, key, watcher) do
     IO.puts("\n== ingest: pushing the working tree, rebuilding the body")
     push_code(id)
     build_body(id)
@@ -578,6 +601,12 @@ defmodule Bench.Loadgen do
     Enum.each(vus_list(), fn vus ->
       label = "loadgen-vus#{vus}#{label_suffix()}"
 
+      Bench.WatchMetrics.set_phase(watcher, "drain-vus#{vus}")
+      drain = await_hot_drain(dataset, table, key)
+      IO.puts("== #{label}: hot tier #{drain_outcome(drain)}")
+
+      Bench.WatchMetrics.set_phase(watcher, "ingest-vus#{vus}")
+
       IO.puts("== #{label}: warm-up #{warmup_s()}s")
       run!(id, warmup_script(urls, vus))
 
@@ -590,7 +619,12 @@ defmodule Bench.Loadgen do
       out = run!(id, measure_script(urls, vus, label))
       IO.puts(String.trim(out))
 
-      pods = Task.await(pods_task, :infinity)
+      pods =
+        pods_task
+        |> Task.await(:infinity)
+        |> Map.put("drain_wait_s", drain.waited_s)
+        |> Map.put("drain_hot_files_left", drain.hot_files)
+
       File.write!(Path.join(results_dir(), "#{label}.pods.json"), JSON.encode!(pods) <> "\n")
 
       Process.sleep(pause_s() * 1000)
@@ -599,6 +633,54 @@ defmodule Bench.Loadgen do
     delete_api_key()
     fetch()
   end
+
+  defp drain_wait_s, do: Bench.env_int("DRAIN_WAIT_S", 300)
+
+  defp drain_poll_s, do: Bench.env_int("DRAIN_POLL_S", 10)
+
+  defp await_hot_drain(dataset, table, key) do
+    url = "#{Bench.Remote.base_url()}/v1/queries"
+    sql = count_query("#{dataset}.#{table}", "1971-01-01")
+    started = System.monotonic_time(:second)
+    deadline = started + drain_wait_s()
+    hot_files = poll_hot_drain(url, key, sql, deadline)
+    %{waited_s: System.monotonic_time(:second) - started, hot_files: hot_files}
+  end
+
+  defp poll_hot_drain(url, key, sql, deadline) do
+    files = hot_files(url, key, sql)
+
+    cond do
+      files == 0 ->
+        0
+
+      System.monotonic_time(:second) >= deadline ->
+        files
+
+      true ->
+        Process.sleep(drain_poll_s() * 1000)
+        poll_hot_drain(url, key, sql, deadline)
+    end
+  end
+
+  defp hot_files(url, key, sql) do
+    headers = [{"authorization", "Bearer #{key}"}]
+    body = JSON.encode!(%{"query" => sql, "timeoutMs" => 60_000, "maxResults" => 1})
+
+    case Bench.http(:post, url, headers, "application/json", body, 90_000) do
+      {:ok, status, response} when status in 200..299 ->
+        response |> JSON.decode!() |> get_in(["job", "statistics", "hot", "filesTotal"]) ||
+          :unknown
+
+      _failure ->
+        :unknown
+    end
+  end
+
+  defp drain_outcome(%{waited_s: waited_s, hot_files: 0}), do: "empty after #{waited_s}s"
+
+  defp drain_outcome(%{waited_s: waited_s, hot_files: hot_files}),
+    do: "NOT drained after #{waited_s}s (#{inspect(hot_files)} hot files) — continuing"
 
   # ── bench: pruning ─────────────────────────────────────────────────────────
 
@@ -645,6 +727,7 @@ defmodule Bench.Loadgen do
       Enum.map(cases, fn {name, sql} ->
         measured = Enum.map(1..prune_repeats(), fn _ -> time_query(url, key, sql) end)
         ok = Enum.filter(measured, &(&1.error == nil))
+        explained = explain_query(url, key, sql)
 
         summary = %{
           "case" => name,
@@ -659,13 +742,16 @@ defmodule Bench.Loadgen do
             case Enum.find(measured, &(&1.error != nil)) do
               nil -> nil
               failed -> failed.error
-            end
+            end,
+          "engine_total_s" => explained.engine_total_s,
+          "explain_analyze" => explained.plan,
+          "explain_error" => explained.error
         }
 
         IO.puts(
           "== #{name}: wall med #{summary["wall_ms_med"]}ms, " <>
             "durationMs med #{summary["duration_ms_med"]}, rows #{summary["rows"]}, " <>
-            "errors #{summary["errors"]}"
+            "errors #{summary["errors"]}, engine #{summary["engine_total_s"] || "?"}s"
         )
 
         summary
@@ -716,6 +802,37 @@ defmodule Bench.Loadgen do
 
       {:error, reason} ->
         %{wall_ms: nil, duration_ms: nil, rows: nil, error: inspect(reason)}
+    end
+  end
+
+  defp explain_query(url, key, sql) do
+    headers = [{"authorization", "Bearer #{key}"}]
+    timeout_ms = Bench.env_int("PRUNE_TIMEOUT_MS", 180_000)
+
+    body =
+      JSON.encode!(%{"query" => sql, "explain" => "analyze", "timeoutMs" => timeout_ms})
+
+    case Bench.http(:post, url, headers, "application/json", body, timeout_ms + 30_000) do
+      {:ok, status, response} when status in 200..299 ->
+        plan = response |> JSON.decode!() |> get_in(["job", "explain"])
+        %{plan: plan, engine_total_s: engine_total_s(plan), error: nil}
+
+      {:ok, status, response} ->
+        %{plan: nil, engine_total_s: nil, error: "HTTP #{status}: #{trunc_text(response)}"}
+
+      {:error, reason} ->
+        %{plan: nil, engine_total_s: nil, error: inspect(reason)}
+    end
+  end
+
+  defp engine_total_s(nil), do: nil
+
+  defp engine_total_s(plan) do
+    with [_, seconds] <- Regex.run(~r/Total Time: ([0-9.]+)s/, plan),
+         {value, _rest} <- Float.parse(seconds) do
+      value
+    else
+      _no_match -> nil
     end
   end
 
@@ -924,8 +1041,8 @@ defmodule Bench.Loadgen do
     set -euo pipefail
     cd #{remote_dir()}
     #{fetch_auth()}
-    k6 run --quiet -e URLS='#{urls}' -e AUTH="$AUTH" -e ROWS=3062 \
-      -e BODY=#{remote_dir()}/bodies/eachrow.3062.ndjson \
+    k6 run --quiet -e URLS='#{urls}' -e AUTH="$AUTH" -e ROWS=#{rows()} \
+      -e BODY=#{remote_dir()}/#{body_file()} \
       -e VUS=#{vus} -e DURATION=#{warmup_s()}s k6/insert.js >/dev/null
     """
   end
@@ -935,8 +1052,8 @@ defmodule Bench.Loadgen do
     set -euo pipefail
     cd #{remote_dir()}
     #{fetch_auth()}
-    k6 run --quiet -e URLS='#{urls}' -e AUTH="$AUTH" -e ROWS=3062 \
-      -e BODY=#{remote_dir()}/bodies/eachrow.3062.ndjson \
+    k6 run --quiet -e URLS='#{urls}' -e AUTH="$AUTH" -e ROWS=#{rows()} \
+      -e BODY=#{remote_dir()}/#{body_file()} \
       -e VUS=#{vus} -e DURATION=#{duration_s()}s \
       -e JSON_OUT=results/#{label}.k6.json k6/insert.js
     """

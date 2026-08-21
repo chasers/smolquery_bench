@@ -13,7 +13,7 @@ before the cluster showed its ceiling. Do not compare these numbers with the
 ## Setup
 
 - Load generator: c7i.2xlarge (`i-02a17ae3b82530c27`), eu-central-1a, posts
-  to the api pod at `http://10.61.3.203:4000`.
+  to the api pod at `http://<api-pod-ip>:4000`.
 - Target: `bench.otel_logs_v2`, cluster on `main@9574a4e` (T-250/251/259/260/261
   in; PR #166 not deployed).
 - Sweep: 8 to 128 VUs, 30 s measured per step. The body carries the

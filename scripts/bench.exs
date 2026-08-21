@@ -14,16 +14,20 @@ defmodule Bench do
 
   @doc """
   The table every arm targets. `otel_logs_v3` partitions by the `inserted_at`
-  date on ClickHouse and clusters by `project_id` on smolquery.
+  date on ClickHouse and clusters by `project_id` on smolquery. `otel_logs_v4`
+  carries the same 63 columns and returns to the two-column clustering key, to
+  measure compaction on a table whose segments stay date-contiguous.
   """
   def table, do: env("TABLE", "otel_logs_v3")
 
   @doc """
   The clustering key sent to smolquery, as a JSON array string.
 
-  `otel_logs_v3` clusters by `project_id` alone. The older tables keep the
-  two-column key they were measured with. `CLUSTERING` overrides both, as a
-  comma-separated column list; an empty value clears clustering.
+  `otel_logs_v3` clusters by `project_id` alone, `otel_logs_v4` by
+  `[project_id, timestamp]`, and `otel_logs_v5` through `otel_logs_v20` by
+  `[project_id, inserted_at]`. Every older table uses `[project_id, timestamp]`.
+  `CLUSTERING` overrides both, as a comma-separated column list; an empty value
+  clears clustering.
   """
   def clustering(table \\ table()) do
     case env("CLUSTERING", nil) do
@@ -35,6 +39,36 @@ defmodule Bench do
   end
 
   defp default_clustering("otel_logs_v3"), do: ["project_id"]
+  defp default_clustering("otel_logs_v4"), do: ["project_id", "timestamp"]
+  defp default_clustering("otel_logs_v5"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v6"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v7"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v8"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v9"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v10"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v11"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v12"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v13"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v14"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v15"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v16"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v17"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v18"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v19"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v20"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v21"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v22"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v23"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v24"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v25"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v26"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v27"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v28"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v29"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v30"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v31"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v32"), do: ["project_id", "inserted_at"]
+  defp default_clustering("otel_logs_v33"), do: ["project_id", "inserted_at"]
   defp default_clustering(_table), do: ["project_id", "timestamp"]
 
   @bench_types ~w(ingest pruning compaction)
@@ -453,7 +487,10 @@ defmodule Bench.Remote do
   success, because the dataset and the table survive the previous step.
   """
 
-  def base_url, do: Bench.env("BASE_URL", "https://eu-central-1-sandbox.smolquery.com:8443")
+  def base_url do
+    System.get_env("BASE_URL") ||
+      Bench.fatal!("set BASE_URL to the remote cluster endpoint, e.g. https://<host>:8443")
+  end
 
   def dataset, do: Bench.env("DATASET", "bench")
 
@@ -712,6 +749,214 @@ defmodule Bench.WatchPods do
 
   defp avg([]), do: nil
   defp avg(values), do: Enum.sum(values) / length(values)
+end
+
+defmodule Bench.WatchMetrics do
+  @moduledoc """
+  Samples every pod's telemetry counters into one SQLite database per bench
+  run: one row per metric per pod per tick, every `METRICS_INTERVAL_S`
+  seconds (default 10).
+
+  Since smolquery 0.12.0 (T-302) every node serves `GET /metrics` on port
+  4003 (`METRICS_PORT` overrides), gated by the `x-smolquery-internal`
+  header. Counters stay node-local, so the sampler still visits every pod.
+  Pods are not routable from outside the cluster and the apiserver proxy
+  cannot add the header, so each scrape is a `kubectl exec` running a bash
+  `/dev/tcp` fetch against the pod's own listener, with the pod's own
+  `SMOLQUERY_INTERNAL_SECRET` — no HTTP client in the image, no VM boot in
+  the pod, and the secret never leaves the cluster.
+
+  A transient kubectl failure skips that pod for one tick; it never stops
+  the sweep. `sqlite3` comes with macOS.
+  """
+  @schema """
+  CREATE TABLE IF NOT EXISTS samples (
+    sampled_at TEXT NOT NULL,
+    phase TEXT,
+    pod TEXT NOT NULL,
+    metric TEXT NOT NULL,
+    labels TEXT NOT NULL,
+    value REAL NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS samples_by_metric ON samples (metric, pod, sampled_at);
+  """
+
+  def main(argv) do
+    case argv do
+      [seconds, out] ->
+        watcher = start(out)
+        Process.sleep(String.to_integer(seconds) * 1000)
+        stop(watcher)
+
+      _ ->
+        Bench.fatal!("usage: watch-metrics.exs <seconds> <out.sqlite3>")
+    end
+  end
+
+  def interval_s, do: Bench.env_int("METRICS_INTERVAL_S", 10)
+
+  def db_path(results_dir, label) do
+    Bench.env("METRICS_DB", Path.join(results_dir, "#{label}.metrics.sqlite3"))
+  end
+
+  def start(db) do
+    init_db(db)
+    {:ok, agent} = Agent.start_link(fn -> %{phase: nil, stop: false} end)
+    task = Task.async(fn -> loop(db, agent, 0) end)
+    IO.puts("== metrics: sampling every #{interval_s()}s → #{db}")
+    %{db: db, agent: agent, task: task}
+  end
+
+  def set_phase(watcher, phase) do
+    Agent.update(watcher.agent, &%{&1 | phase: phase})
+  end
+
+  def stop(watcher) do
+    Agent.update(watcher.agent, &%{&1 | stop: true})
+    ticks = Task.await(watcher.task, (interval_s() + 90) * 1000)
+    Agent.stop(watcher.agent)
+    IO.puts("== metrics: #{ticks} tick(s) → #{watcher.db}")
+    watcher.db
+  end
+
+  defp loop(db, agent, ticks) do
+    if Agent.get(agent, & &1.stop) do
+      ticks
+    else
+      tick(db, Agent.get(agent, & &1.phase))
+      Process.sleep(interval_s() * 1000)
+      loop(db, agent, ticks + 1)
+    end
+  end
+
+  defp tick(db, phase) do
+    sampled_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    rows =
+      pods()
+      |> Task.async_stream(&{&1, render(&1)},
+        timeout: 60_000,
+        on_timeout: :kill_task,
+        max_concurrency: 16
+      )
+      |> Enum.flat_map(fn
+        {:ok, {pod, text}} when is_binary(text) ->
+          Enum.map(parse(text), fn {metric, labels, value} -> {pod, metric, labels, value} end)
+
+        _failed ->
+          []
+      end)
+
+    insert(db, sampled_at, phase, rows)
+  end
+
+  defp pods do
+    selector = Bench.env("POD_SELECTOR", "cluster=smolquery")
+
+    args =
+      ["get", "pods", "-l", selector] ++
+        ["-o", "jsonpath={range .items[*]}{.metadata.name} {end}"]
+
+    case Bench.Kube.cmd(args) do
+      {output, 0} ->
+        case output |> String.split() |> Enum.sort() do
+          [] ->
+            IO.puts(:stderr, "metrics: no pods matched #{selector}; recording nothing this tick")
+            []
+
+          pods ->
+            pods
+        end
+
+      {output, _} ->
+        IO.puts(:stderr, "metrics: pod listing failed: #{String.slice(output, 0, 200)}")
+        []
+    end
+  end
+
+  defp metrics_port, do: Bench.env("METRICS_PORT", "4003")
+
+  # The pod's own cgroup, read in the same exec as the scrape. Counters alone
+  # cannot say whether a tier is stable — a pod at 3.9 GiB and climbing looks
+  # identical to one at 1.2 GiB and flat until it OOMs.
+  @cgroup """
+  printf 'bench_pod_memory_bytes %s\\n' "$(cat /sys/fs/cgroup/memory.current 2>/dev/null || echo 0)"
+  printf 'bench_pod_memory_max_bytes %s\\n' "$(cat /sys/fs/cgroup/memory.max 2>/dev/null | grep -v max || echo 0)"
+  printf 'bench_pod_cpu_usec_total %s\\n' "$(awk '/^usage_usec/{print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || echo 0)"
+  """
+
+  defp render(pod) do
+    fetch = """
+    exec 3<>/dev/tcp/127.0.0.1/#{metrics_port()}
+    printf 'GET /metrics HTTP/1.0\\r\\nhost: localhost\\r\\nx-smolquery-internal: %s\\r\\n\\r\\n' "$SMOLQUERY_INTERNAL_SECRET" >&3
+    cat <&3
+    echo
+    echo '--- cgroup ---'
+    #{@cgroup}
+    """
+
+    case Bench.Kube.cmd(["exec", pod, "-c", "smolquery", "--", "bash", "-c", fetch]) do
+      {response, 0} -> split_response(response)
+      {_, _} -> nil
+    end
+  end
+
+  defp split_response(response) do
+    case String.split(response, "--- cgroup ---", parts: 2) do
+      [http, cgroup] -> [body(http), cgroup] |> Enum.reject(&is_nil/1) |> Enum.join("\n")
+      [http] -> body(http)
+    end
+  end
+
+  defp body("HTTP/" <> _ = response) do
+    case String.split(response, "\r\n\r\n", parts: 2) do
+      [headers, body] -> if headers =~ " 200 ", do: body, else: nil
+      _no_body -> nil
+    end
+  end
+
+  defp body(_response), do: nil
+
+  defp parse(text) do
+    text
+    |> String.split("\n", trim: true)
+    |> Enum.flat_map(&parse_line/1)
+  end
+
+  defp parse_line(line) do
+    with [_, metric, labels, value] <-
+           Regex.run(~r/^([A-Za-z_:][A-Za-z0-9_:]*)(\{.*\})? (\S+)$/, line),
+         {number, ""} <- Float.parse(value) do
+      [{metric, labels, number}]
+    else
+      _no_metric -> []
+    end
+  end
+
+  defp insert(_db, _sampled_at, _phase, []), do: :ok
+
+  defp insert(db, sampled_at, phase, rows) do
+    values =
+      Enum.map_join(rows, ",", fn {pod, metric, labels, value} ->
+        "(#{sql_string(sampled_at)},#{sql_string(phase)},#{sql_string(pod)}," <>
+          "#{sql_string(metric)},#{sql_string(labels)},#{value})"
+      end)
+
+    sql = "INSERT INTO samples (sampled_at,phase,pod,metric,labels,value) VALUES #{values};"
+
+    case Bench.sh("sqlite3", [db, sql]) do
+      {_, 0} -> :ok
+      {output, _} -> IO.puts(:stderr, "metrics insert failed: #{String.slice(output, 0, 200)}")
+    end
+  end
+
+  defp sql_string(nil), do: "NULL"
+  defp sql_string(text), do: "'" <> String.replace(text, "'", "''") <> "'"
+
+  defp init_db(db) do
+    File.mkdir_p!(Path.dirname(db))
+    Bench.sh!("sqlite3", [db, @schema])
+  end
 end
 
 defmodule Bench.RunArm do

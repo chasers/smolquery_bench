@@ -42,6 +42,10 @@ run = "RESULTS=results/raw-remote elixir scripts/report.exs"
 description = "Sample pod CPU and RSS for N seconds (usage: mise run pods -- 30 out.json)"
 run = "elixir scripts/watch-pods.exs"
 
+[tasks.metrics]
+description = "Sample every pod's metrics into SQLite for N seconds (usage: mise run metrics -- 300 out.sqlite3)"
+run = "elixir scripts/watch-metrics.exs"
+
 # ── in-region load generator ─────────────────────────────────────────────────
 
 [tasks.bench-up]
@@ -83,6 +87,10 @@ run = "elixir scripts/loadgen.exs fetch"
 [tasks.bench-report]
 description = "Markdown table for the load generator's results"
 run = "RESULTS=results/raw-loadgen elixir scripts/report.exs"
+
+[tasks.report-html]
+description = "Charted HTML report for one run (usage: mise run report-html -- results/raw-loadgen/<run>.metrics.sqlite3)"
+run = "elixir scripts/report-html.exs"
 
 [tasks.bench-ssh]
 description = "Print the SSM start-session command for the load generator"

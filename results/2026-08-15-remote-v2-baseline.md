@@ -1,7 +1,7 @@
 # Remote sandbox baseline — `otel_logs_v2`, 2026-08-15
 
 The latest bench run against the deployed cluster at
-`eu-central-1-sandbox.smolquery.com:8443`, driven from a laptop over the public
+`<sandbox-host>:8443`, driven from a laptop over the public
 internet. Supersedes the narrative in
 [2026-08-14-remote-sandbox.md](2026-08-14-remote-sandbox.md), which records how
 we got here.

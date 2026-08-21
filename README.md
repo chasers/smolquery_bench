@@ -33,6 +33,7 @@ scripts/setup-clickhouse.exs         # cold path, server, table, fsync settings
 scripts/run-arm.exs clickhouse
 
 scripts/report.exs                   # markdown table from results/raw/
+scripts/report-html.exs <db.sqlite3> # charted HTML report for one run
 scripts/stop.exs                     # stops both servers
 
 scripts/sweep.exs smolquery          # full VU sweep, VUS_LIST="1 4 8 16 32 64"
@@ -68,6 +69,7 @@ mise run bench-up                    # launch, install k6 + Go, push harness, bu
 mise run bench-status                # instance, SSM ping, api pod it targets
 mise run bench-sweep                 # run the selected benches (BENCHES=..., default ingest)
 mise run bench-report                # table for results/raw-loadgen/
+mise run report-html -- <db>         # charted HTML report for one run
 mise run bench-down                  # terminate
 ```
 
@@ -87,12 +89,15 @@ BENCHES=ingest,pruning mise run bench-sweep
 | type | measures | writes |
 |---|---|---|
 | `ingest` | the VU sweep: rows/s, latency, refusals, pod CPU and memory | `<label>.k6.json`, `<label>.pods.json` |
-| `pruning` | a `count` and a `scan` query against a live date, an empty date, and no filter | `<label>.prune.json` |
+| `pruning` | a `count` and a `scan` query against a live date, an empty date, and no filter; each case also records an `"explain": "analyze"` plan and its engine time | `<label>.prune.json` |
 | `compaction` | compaction outcomes and pod restarts over a long window | `<label>.compact.json` |
 
 The types always run in the order ingest, pruning, compaction, whatever order
 you type them in. Pruning reads the rows ingest writes, and compaction needs
 those rows sealed.
+
+Every sweep also samples each pod's metrics into a SQLite database — see
+[Pod metrics sampling](#pod-metrics-sampling).
 
 **Read the `scan` cases, not the `count` ones, to judge pruning.** `count(*)`
 is answered from Parquet footer statistics without touching row data, so it
@@ -103,6 +108,94 @@ the empty-date `scan` **180x** faster.
 
 `bench-up` and friends need a live SSO session:
 `aws sso login --profile sandbox`.
+
+## Pod metrics sampling
+
+Every `bench-sweep` samples the full metric set of every pod, every 10
+seconds, for the whole sweep. Each sweep writes its own database:
+`results/raw-loadgen/loadgen-<UTC stamp><suffix>.metrics.sqlite3`. Run it on
+its own with `mise run metrics -- 300 out.sqlite3`.
+
+Since smolquery 0.12.0 (T-302), **every node serves `GET /metrics`** on
+port 4003 (`METRICS_PORT` overrides), gated by the **`x-smolquery-internal`**
+header (`SMOLQUERY_INTERNAL_SECRET`), never the tenant api key. Counters
+are node-local ETS, so one pod's answer never contains another pod's
+counters — the sampler visits every pod.
+
+Pods are not routable from outside the cluster, and the apiserver proxy
+cannot add the auth header. Each scrape is therefore a `kubectl exec`
+running a bash `/dev/tcp` fetch against the pod's own listener, with the
+pod's own secret. The image ships no HTTP client, the fetch boots no VM in
+the pod, and the secret stays inside the cluster. Builds before 0.12.0
+served `/metrics` from the api role only; on those, scrape with
+`bin/smolquery rpc "IO.puts(Smolquery.Telemetry.render())"` instead.
+
+One table, `samples`: `sampled_at`, `phase` (the bench step, e.g.
+`ingest-vus16`, `compaction`), `pod`, `metric`, `labels`, `value`. All series
+except the two `*_shape_info` gauges are counters, so analysis reads deltas:
+
+```sql
+SELECT pod, max(value) - min(value) AS sealed
+FROM samples
+WHERE metric = 'smolquery_seal_segments_total' AND labels LIKE '%ok%'
+GROUP BY pod;
+```
+
+Counters reset when a pod restarts. A `max - min` delta is wrong across a
+crash — a reset shows as a drop, and the drop itself is evidence: the
+sampler caught an OOMKill on 2026-08-18 that the log watcher missed.
+
+The seal and compaction series to read first:
+`smolquery_seal_attempts_total{result}`, `smolquery_seal_segments_total{result}`,
+`smolquery_seal_stuck_attempts_total`, `smolquery_seal_release_failures_total`,
+`smolquery_compactions_total{result}`,
+`smolquery_compaction_segments_replaced_total`. Compare them against
+`smolquery_buffer_rows_committed_total` to judge whether sealing keeps up
+with ingest. A nonzero stuck or release-failure count means sealing is
+stalled.
+
+## The HTML run report
+
+Every sweep writes a charted HTML report beside the markdown write-ups:
+`results/loadgen-<UTC stamp><suffix>.html`. Build one by hand from any
+run's metrics database:
+
+```
+mise run report-html -- results/raw-loadgen/<run>.metrics.sqlite3 [out.html]
+```
+
+The report is one self-contained file — no network, no build step. Open it
+in a browser and hover any chart to read one bucket across the whole run.
+It covers, in order: the load points from `*.k6.json` and `*.pods.json`,
+row throughput and response classes, the ingest pipeline stage by stage,
+the buffer commit phases, seal, compaction, housekeeping, the pruning cases
+from `*.prune.json`, and a table of every series. A counter the report does
+not chart yet is listed at the end rather than dropped.
+
+Sidecar files join the run **by timestamp, not by name**: a `*.k6.json`
+belongs to the report when its `inserted_at` falls inside the sampling
+window. Names drift between sweeps; timestamps do not.
+
+Three rules keep a degrading cluster from producing fiction:
+
+- A counter that falls is a pod restart. That interval leaves every ratio
+  it touches, and the bucket is flagged. A restart during a missed scrape
+  still counts — it is exactly the event worth seeing.
+- An interval longer than the gap cut is a scrape the sampler missed. It
+  leaves every series, and the bucket renders as a hole rather than a zero.
+- A per-operation figure divides the summed time delta by the summed
+  operation delta over the same intervals, so a slow pod carries its own
+  weight. Buckets under `MIN_OPS` (default 20) operations are dropped: a
+  pod that boots and dies inside one bucket otherwise reports a mean commit
+  of several seconds.
+
+Rates sum per-pod rates instead of dividing a tier delta by a wall clock,
+so a partly scraped bucket reads honestly.
+
+`BUCKET_S` sets the bucket width — 30 s for a run under 10 minutes, 60 s
+otherwise. `MIN_OPS` sets the denominator floor. Assets live in
+`scripts/report/report.css` and `scripts/report/report.js`; the generator
+inlines them, so edit those files rather than the emitted HTML.
 
 ## Knobs
 
@@ -115,11 +208,20 @@ the empty-date `scan` **180x** faster.
   2026-08-16, and it left extra api pods idle. The load generator cannot use the
   Service ClusterIP: it sits outside the cluster, and kube-proxy only balances
   from inside.
+- **Drain gate**: every ingest VU point waits for the hot tier to empty
+  before its warm-up. The gate polls a pruned query through the query API and
+  reads `statistics.hot.filesTotal`. `DRAIN_WAIT_S` (default 300) bounds the
+  wait; `DRAIN_POLL_S` (default 10) sets the poll tick. The wait lands in the
+  point's `*.pods.json` as `drain_wait_s`, and the metrics database tags the
+  period as its own phase, `drain-vusN`. On a timeout the sweep continues and
+  records the leftover file count as `drain_hot_files_left`.
 - **Bench selection**: `BENCHES` (default `ingest`). Pruning takes
   `PRUNE_DATES` (comma-separated `YYYY-MM-DD`, default today), `PRUNE_REPEATS`
   (default 3), `PRUNE_SETTLE_S` (default 30), `PRUNE_COLUMN` (default
   `duration_ms`) and `PRUNE_TIMEOUT_MS` (default 180000). Compaction takes
   `COMPACT_WATCH_S` (default 900).
+- **Metrics sampling**: `METRICS_INTERVAL_S` (default 10) sets the tick;
+  `METRICS_DB` overrides the database path.
 - **Body dates**: `BASE_DATE=YYYY-MM-DD` backdates the `timestamp` column.
   Unset, the body carries the date of the run that generates it. Use it to put
   rows in more than one date partition.
@@ -135,7 +237,7 @@ the empty-date `scan` **180x** faster.
 - **The SIGBUS crash**: the server dies in about a third of local runs, at any VU
   count. No knob avoids it. Check the server is alive after every run — see
   [The SIGBUS crash](#the-sigbus-crash).
-- **remote arm**: `BASE_URL` (default the eu-central-1 sandbox, port **8443** —
+- **remote arm**: `BASE_URL` (required — the cluster endpoint, port **8443**;
   port 443 is the web UI), `DATASET` (default `bench`), `TABLE` (default
   `otel_logs_v3`), `CLUSTERING`, `SCHEMA_FILE`, and `API_KEY`. With `API_KEY` unset it reads
   `SMOLQUERY_API_KEY` from `SECRETS_FILE`; `mise.toml` points that at the
@@ -310,12 +412,15 @@ tools/genbody/        deterministic 63-column OTel NDJSON generator
 tools/watch/          CPU and RSS sampler, ps-based, for the server and k6
 k6/insert.js          load script, closed loop (VUS) or open loop (RATE)
 schemas/              smolquery table-create JSON, ClickHouse MergeTree DDL
-scripts/              setup, run, sweep, stop, report, watch-pods, loadgen
+scripts/              setup, run, sweep, stop, report, watch-pods, watch-metrics, loadgen
+scripts/report_html.exs  the HTML run report generator
+scripts/report/       its CSS and JS, inlined into every report
 mise.toml             every workflow as a task — `mise tasks`
 results/raw/          k6 and watch JSON per run (gitignored)
 results/raw-remote*/  the same, plus *.pods.json, for the remote arm
-results/raw-loadgen/  the in-region load generator's runs
+results/raw-loadgen/  the in-region load generator's runs, plus *.metrics.sqlite3 per sweep
 results/*.md          dated baseline writeups
+results/*.html        one charted report per load test, beside its writeup
 ```
 
 Every result file carries `inserted_at`, an ISO 8601 UTC timestamp written when
@@ -377,6 +482,14 @@ Adding the column changed the schema, and smolquery answers 409 on a
 | `otel_logs` | `ORDER BY (project_id, timestamp)` | clustering `[project_id, timestamp]` | no `inserted_at` |
 | `otel_logs_v2` | same | same | adds `inserted_at` |
 | `otel_logs_v3` | **`PARTITION BY toDate(inserted_at)`**, `ORDER BY (project_id, timestamp)` | clustering `[project_id]` | the default |
+| `otel_logs_v4` | same as v3 | clustering `[project_id, timestamp]` | same 63 columns as v3; a fresh table to measure compaction under the 2026-08-17 prod code |
+| `otel_logs_v5`–`v7` | same as v3 | clustering `[project_id, inserted_at]` | successive fresh tables for the 2026-08-17 compaction runs — the router has no table delete, so each run that needs an empty table gets a new one |
+| `otel_logs_v8` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-18 seal and compaction bench, the first with metrics sampling |
+| `otel_logs_v9` | same as v3 | clustering `[project_id, inserted_at]` | a fresh table for the 2026-08-19 batch-size runs — `otel_logs_v8` wedged on a claim its replica could not accept, so its hot tier stopped draining |
+| `otel_logs_v10` | same as v3 | clustering `[project_id, inserted_at]` | a fresh table for the 2026-08-20 group-commit tuning — `otel_logs_v9`'s base partition ref wedged on a 488-segment claim the merge path cannot complete (T-335) |
+| `otel_logs_v11`–`v19` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-20 seal-parity runs (T-333). `v11` carries a retrying compaction failure (T-343) — do not reuse it |
+| `otel_logs_v20`–`v32` | same as v3 | clustering `[project_id, inserted_at]` | one fresh table per run: the 2026-08-20 partition sweep, then the 2026-08-21 memory sweep |
+| `otel_logs_v33` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-21 96-VU parity run — the current record, and the current table |
 
 `otel_logs_v3` is what `TABLE` defaults to. It exists to answer one question:
 does a query for a single date read only that date's files?
@@ -407,6 +520,49 @@ exceeded 166% of its 1,370% CPU. Current baseline:
 [results/2026-08-15-remote-v2-baseline.md](results/2026-08-15-remote-v2-baseline.md);
 how we got there:
 [results/2026-08-14-remote-sandbox.md](results/2026-08-14-remote-sandbox.md).
+
+The 2026-08-18 `otel_logs_v8` run measured sealing and compaction under
+ingest: 175,511 rows/s at 16 VUs, every row sealed, the hot tier empty ten
+minutes after ingest — and one storage pod OOMKilled during the seal drain.
+Two pre-existing corrupt segments poison the v6 and v7 compaction loops. See
+[results/2026-08-18-v8-seal-compaction.md](results/2026-08-18-v8-seal-compaction.md).
+The same evening, after the T-304 partition release, a repeat run measured the
+seal skew falling from 12/79/9 to 25/36/39 across the storage pods at the same
+throughput — and one more OOM, concurrent with a poison compaction:
+[results/2026-08-18-v8-post-t304-rebench.md](results/2026-08-18-v8-post-t304-rebench.md).
+On smolquery 0.13.0, with the corrupt v6/v7 segments remediated, the third v8
+run came back clean: **200,253 rows/s** at 16 VUs, seal skew 32/32/35, zero
+errors, zero restarts, no OOM. A 4-point VU sweep the same night put the peak
+at 16 VUs and found the ceiling: the buffer pods pin their RSS at the 4,096 MB
+container limit at 32–64 VUs, admission sheds load with 429s, and throughput
+falls to 107k rows/s at 64 VUs — with zero OOMs.
+
+**Those are burst numbers.** A 30-minute soak at the same 16 VUs collapsed the
+buffer tier after three minutes: every buffer pod OOMKilled and entered a
+boot–commit–die loop, and the tier recovered only when the load stopped. The
+post-load drain then OOMKilled a storage pod and stalled with 458 hot files
+unsealed. The first sustained number arrived on 2026-08-20: **38,610 rows/s
+for 600 s** at 1 VU with **20,000 rows per insert**, zero restarts and sealing
+at parity — see
+[`results/2026-08-20-batch-size-and-heap-garbage.md`](results/2026-08-20-batch-size-and-heap-garbage.md).
+It holds at that batch size and not at 3,062 rows, so the batch size is part of
+the number. See
+[results/2026-08-19-v8-soak-collapse.md](results/2026-08-19-v8-soak-collapse.md). The same run showed that the timed pruning
+cases measure a fixed ~1.3–4 s per-query floor (engine start plus hot-tier
+manifest fetches), not pruning — the engine plans the empty date to
+`EMPTY_RESULT` in 6.4 ms:
+[results/2026-08-19-v8-0-13-0-rebench.md](results/2026-08-19-v8-0-13-0-rebench.md).
+
+The 2026-08-20/21 tuning sessions then found the cluster's real ceiling: the
+merge engine's memory budget. Raising `SMOLQUERY_STORAGE_MEMORY_LIMIT` from
+2048 MiB to 3584 MiB tripled sealed throughput at identical settings. The
+current record is **254,163 rows/s at 96 VUs with sealing at parity** —
+`seal:commit` 0.990, 251,621 rows/s sealed, zero refusals, ordinary 6.87 MiB
+requests, on `otel_logs_v33`. That is 3.7x the 2026-08-20 morning baseline,
+in a 3-minute window, not a soak. The winning shape is 3 write partitions ×
+8 live claims. The running state and the full write-up index live in
+[results/README.md](results/README.md); the write-up is
+[results/2026-08-21-memory-is-the-seal-ceiling.md](results/2026-08-21-memory-is-the-seal-ceiling.md).
 
 Driven from an in-region load generator instead, the same cluster reached
 **127,111 rows/s**. What scaling that to 1M rows/s would cost is modelled in

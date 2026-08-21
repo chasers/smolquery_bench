@@ -4,3 +4,5 @@ results/raw/
 results/raw-*/
 results/crashes-*/
 .plans/
+.claude/settings.local.json
+erl_crash.dump
