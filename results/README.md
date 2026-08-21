@@ -98,8 +98,9 @@ T-333 and T-335 are **done** and deployed.
   cache and reads at the container limit while anon sits far below.
 - **`bench.otel_logs_v11` carries a retrying compaction failure.** Use a
   later table — `otel_logs_v33` is current.
-- **The loadgen EC2 box is still running.** Stop it with `mise run bench-down`.
-  `TaskStop` does not kill k6 on the box - use `/tmp/killk6.sh`.
+- **Check for a running loadgen EC2 box** with `mise run bench-status`; stop
+  it with `mise run bench-down`. `TaskStop` does not kill k6 on the box - use
+  `/tmp/killk6.sh`. Terminated after the 2026-08-21 kv sweep.
 
 ## Next step
 
