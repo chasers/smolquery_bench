@@ -61,7 +61,8 @@ CREATE TABLE bench.otel_logs
     session_id                Nullable(String),
     thread_name               Nullable(String),
     log_file_path             Nullable(String),
-    sampled                   Nullable(Bool)
+    sampled                   Nullable(Bool),
+    inserted_at               Nullable(DateTime64(6))
 )
 ENGINE = MergeTree
 ORDER BY (project_id, timestamp)

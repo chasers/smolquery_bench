@@ -1,0 +1,101 @@
+[env]
+AWS_PROFILE = "sandbox"
+AWS_REGION = "eu-central-1"
+CLUSTER_NAME = "smolquery-dev"
+KUBE_CONTEXT = "eks-smolquery-dev"
+KUBECONFIG = "{{env.HOME}}/Dev/supabase/smolquery-deploy/smolquery-deploy/.kubeconfig"
+SECRETS_FILE = "{{env.HOME}}/Dev/supabase/smolquery-deploy/smolquery-deploy/secrets.env.json"
+
+# ── local arms ───────────────────────────────────────────────────────────────
+
+[tasks.bodies]
+description = "Generate the deterministic NDJSON body (seed 42, BASE_DATE=YYYY-MM-DD to backdate)"
+run = "elixir scripts/gen-bodies.exs"
+
+[tasks.report]
+description = "Markdown table from a results directory (RESULTS=... to pick one)"
+run = "elixir scripts/report.exs"
+
+[tasks.stop]
+description = "Stop both local servers"
+run = "elixir scripts/stop.exs"
+
+# ── remote arm, driven from this machine ─────────────────────────────────────
+
+[tasks.remote-setup]
+description = "Health check the deployed cluster, then ensure the dataset and table"
+run = "elixir scripts/setup-remote.exs"
+
+[tasks.remote-run]
+description = "One run against the deployed cluster (VUS=... DURATION_S=...)"
+run = "elixir scripts/run-arm.exs remote"
+
+[tasks.remote-sweep]
+description = "VU sweep against the deployed cluster from this machine"
+run = "elixir scripts/sweep.exs remote"
+
+[tasks.remote-report]
+description = "Markdown table for the remote arm's results"
+run = "RESULTS=results/raw-remote elixir scripts/report.exs"
+
+[tasks.pods]
+description = "Sample pod CPU and RSS for N seconds (usage: mise run pods -- 30 out.json)"
+run = "elixir scripts/watch-pods.exs"
+
+[tasks.metrics]
+description = "Sample every pod's metrics into SQLite for N seconds (usage: mise run metrics -- 300 out.sqlite3)"
+run = "elixir scripts/watch-metrics.exs"
+
+# ── in-region load generator ─────────────────────────────────────────────────
+
+[tasks.bench-up]
+description = "Launch the eu-central-1 k6 box, install k6 + Go, push the harness, build the body"
+run = "elixir scripts/loadgen.exs up"
+
+[tasks.bench-status]
+description = "Load generator state: instance, SSM ping, and the api pod it targets"
+run = "elixir scripts/loadgen.exs status"
+
+[tasks.bench-sweep]
+description = "Run the selected benches (BENCHES=ingest,pruning,compaction; default ingest)"
+run = "elixir scripts/loadgen.exs sweep"
+
+[tasks.bench-ingest]
+description = "Ingest bench only: the VU sweep, pod sampling, results pulled back"
+env = { BENCHES = "ingest" }
+run = "elixir scripts/loadgen.exs sweep"
+
+[tasks.bench-pruning]
+description = "Pruning bench only: time a single-date query against a live and an empty date"
+env = { BENCHES = "pruning" }
+run = "elixir scripts/loadgen.exs sweep"
+
+[tasks.bench-compaction]
+description = "Compaction bench only: watch both storage pods for COMPACT_WATCH_S seconds"
+env = { BENCHES = "compaction" }
+run = "elixir scripts/loadgen.exs sweep"
+
+[tasks.bench-all]
+description = "All three benches in order: ingest, then pruning, then compaction"
+env = { BENCHES = "ingest,pruning,compaction" }
+run = "elixir scripts/loadgen.exs sweep"
+
+[tasks.bench-fetch]
+description = "Pull results from the load generator without running a sweep"
+run = "elixir scripts/loadgen.exs fetch"
+
+[tasks.bench-report]
+description = "Markdown table for the load generator's results"
+run = "RESULTS=results/raw-loadgen elixir scripts/report.exs"
+
+[tasks.report-html]
+description = "Charted HTML report for one run (usage: mise run report-html -- results/raw-loadgen/<run>.metrics.sqlite3)"
+run = "elixir scripts/report-html.exs"
+
+[tasks.bench-ssh]
+description = "Print the SSM start-session command for the load generator"
+run = "elixir scripts/loadgen.exs ssh"
+
+[tasks.bench-down]
+description = "Terminate the load generator"
+run = "elixir scripts/loadgen.exs down"

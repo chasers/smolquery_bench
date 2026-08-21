@@ -1,0 +1,660 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loadgen-20260820T025719Z-vu32-100mb</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root {
+  color-scheme: light;
+  --plane: #f2f5f8;
+  --surface: #fbfcfd;
+  --surface-2: #f6f8fa;
+  --ink: #0d1117;
+  --ink-2: #4a535f;
+  --ink-3: #828b96;
+  --rule: rgba(13, 17, 23, 0.11);
+  --grid: #e4e8ec;
+  --axis: #c6cdd5;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7; --s8: #e34948;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+  --good-ink: #076b07; --crit-ink: #b02c2c;
+  --void: rgba(13, 17, 23, 0.055);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --plane: #0b0d10;
+    --surface: #14171b;
+    --surface-2: #191d22;
+    --ink: #eef1f5;
+    --ink-2: #aeb7c2;
+    --ink-3: #7b838e;
+    --rule: rgba(238, 241, 245, 0.13);
+    --grid: #232830;
+    --axis: #333a44;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+    --good-ink: #2fbf2f; --crit-ink: #e46161;
+    --void: rgba(238, 241, 245, 0.06);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --plane: #0b0d10;
+  --surface: #14171b;
+  --surface-2: #191d22;
+  --ink: #eef1f5;
+  --ink-2: #aeb7c2;
+  --ink-3: #7b838e;
+  --rule: rgba(238, 241, 245, 0.13);
+  --grid: #232830;
+  --axis: #333a44;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --good: #0ca30c; --warn: #fab219; --crit: #d03b3b;
+  --good-ink: #2fbf2f; --crit-ink: #e46161;
+  --void: rgba(238, 241, 245, 0.06);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--plane);
+  color: var(--ink);
+  font: 400 15px/1.6 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1140px;
+  margin: 0 auto;
+  padding: 40px 24px 72px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+h1, h2, h3 {
+  font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  margin: 0;
+  text-wrap: balance;
+}
+h1 { font-size: 38px; font-weight: 700; letter-spacing: -0.015em; line-height: 1.1; }
+h2 { font-size: 23px; font-weight: 600; letter-spacing: -0.005em; }
+h3 { font-size: 16px; font-weight: 600; }
+p { margin: 0; max-width: 68ch; color: var(--ink-2); }
+p strong { color: var(--ink); font-weight: 600; }
+
+.eyebrow {
+  font: 500 11px/1 "IBM Plex Mono", ui-monospace, monospace;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+header { display: flex; flex-direction: column; gap: 16px; }
+.runbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 28px;
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: 12px 0;
+  font: 400 12.5px/1.7 "IBM Plex Mono", ui-monospace, monospace;
+  color: var(--ink-2);
+}
+.runbar b { color: var(--ink-3); font-weight: 500; }
+
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1px;
+  background: var(--rule);
+  border: 1px solid var(--rule);
+}
+.tile { background: var(--surface); padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 6px; }
+.tile .k {
+  font: 500 11px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.tile .v {
+  font-family: "IBM Plex Sans Condensed", sans-serif;
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+.tile .v small { font-size: 16px; font-weight: 600; color: var(--ink-2); letter-spacing: 0; }
+.tile .n { font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+
+section { display: flex; flex-direction: column; gap: 18px; }
+.shead { display: flex; flex-direction: column; gap: 7px; }
+
+.panel { background: var(--surface); border: 1px solid var(--rule); }
+.panel-hd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 20px;
+  padding: 14px 18px 0;
+}
+.panel-hd h3 { font-size: 15px; }
+.panel-hd .unit {
+  font: 400 11.5px/1 "IBM Plex Mono", monospace;
+  color: var(--ink-3);
+  letter-spacing: 0.04em;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; padding: 10px 18px 0; }
+.lg { display: inline-flex; align-items: center; gap: 7px; font: 400 12.5px/1 "IBM Plex Sans", sans-serif; color: var(--ink-2); }
+.lg i { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+.lg i.ln { height: 3px; border-radius: 2px; width: 14px; }
+.plot { padding: 4px 6px 6px; }
+.plot svg { display: block; width: 100%; height: auto; }
+.pnote { padding: 4px 18px 15px; font-size: 12.5px; line-height: 1.5; color: var(--ink-3); max-width: 82ch; }
+.empty { padding: 22px 18px 26px; font: 400 13px/1.5 "IBM Plex Mono", monospace; color: var(--ink-3); }
+
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 18px; }
+
+.callout {
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--s2);
+  background: var(--surface);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.callout.crit { border-left-color: var(--crit); }
+.callout .k {
+  font: 500 11px/1 "IBM Plex Mono", monospace;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.callout p { font-size: 14px; }
+
+.tw { overflow-x: auto; border: 1px solid var(--rule); background: var(--surface); }
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font: 400 13px/1.5 "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+th, td { padding: 7px 13px; text-align: right; border-bottom: 1px solid var(--grid); }
+th {
+  font-weight: 500;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-size: 11px;
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+}
+td:first-child, th:first-child { text-align: left; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:hover td { background: var(--surface-2); }
+td.dim { color: var(--ink-3); }
+td.wrap-cell { white-space: normal; max-width: 52ch; }
+.grp td {
+  background: var(--surface-2);
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+.pill { display: inline-block; padding: 1px 8px 2px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; }
+.pill.pass { color: var(--good-ink); background: color-mix(in srgb, var(--good) 15%, transparent); }
+.pill.fail { color: var(--crit-ink); background: color-mix(in srgb, var(--crit) 15%, transparent); }
+
+#tt {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s linear;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.16);
+  padding: 9px 12px;
+  min-width: 172px;
+  font: 400 12.5px/1.55 "IBM Plex Mono", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+#tt .t { font-weight: 600; letter-spacing: 0.05em; color: var(--ink-3); font-size: 11px; text-transform: uppercase; margin-bottom: 5px; }
+#tt .r { display: flex; align-items: center; gap: 8px; justify-content: space-between; }
+#tt .r span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+#tt .r i { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+#tt .r b { font-weight: 600; }
+
+footer { border-top: 1px solid var(--rule); padding-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+footer p { font-size: 13px; color: var(--ink-3); max-width: 92ch; }
+
+:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}
+@media (max-width: 640px) {
+  h1 { font-size: 29px; }
+  .wrap { padding: 28px 16px 56px; gap: 30px; }
+}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">smolquery load test · pod counters</div>
+    <h1>loadgen-20260820T025719Z-vu32-100mb</h1>
+    <p>Every counter on every pod, sampled every 28&nbsp;s and bucketed to 30&nbsp;s. Hover any chart to read one bucket across the run.</p>
+    <div class="runbar">
+      <span><b>window</b> 2026-08-20T02:57:19Z &rarr; 2026-08-20T03:03:53Z (6 min)</span>
+      <span><b>samples</b> 2,366 across 9 pod(s)</span>
+      <span><b>buckets</b> 14 &times; 30s</span>
+      <span><b>gap cut</b> 90s</span>
+    </div>
+  </header>
+  <div class="tiles">
+      <div class="tile"><div class="k">Peak accepted</div><div class="v">91,663<small> rows/s</small></div><div class="n">Best single 30s bucket of the run.</div></div>
+      <div class="tile"><div class="k">Rows accepted</div><div class="v">14.7M<small></small></div><div class="n">Over 6 min of sampling.</div></div>
+      <div class="tile"><div class="k">Failed requests</div><div class="v">0.0<small>%</small></div><div class="n">0 5xx against 4,964 2xx and 0 4xx.</div></div>
+      <div class="tile"><div class="k">Buffer RSS peak</div><div class="v">2,486<small> MB</small></div><div class="n">Highest single buffer pod, from the pod sampler.</div></div>
+  </div>
+  <div id="sections"></div>
+  <footer>
+    <p class="mono">method</p>
+    <p>Counters are node-local and monotonic. Each pod's series is differenced between consecutive scrapes. An interval whose value falls is a pod restart and leaves every ratio it touches. An interval longer than 90&nbsp;s is a missed scrape and leaves every series. Per-operation figures divide the summed time delta by the summed operation delta over the same intervals, so a slow pod carries its own weight; buckets under 20 operations are dropped. Rates sum per-pod rates rather than dividing a tier delta by a wall clock.</p>
+    <p class="mono">ndjson_passthrough=true,write_partitions=3,schema_cache_ttl_ms=60000</p>
+    <p class="mono">flush_writer=duckdb,compression=zstd,flush_max_bytes=100000000,flush_interval_ms=1000,flush_idle_interval_ms=5,commit_siblings=0,encode_concurrency=4,write_pool_size=4,write_engine_threads=1,write_engine_memory_limit=512MB,transport_tls=false</p>
+  </footer>
+</div>
+<div id="tt" role="status" aria-live="off"></div>
+<script>
+const D = {"liveness":[{"total":3,"tier":"api","counts":[3,3,3,3,3,3,3,3,3,0,3,3,3,3]},{"total":3,"tier":"buffer","counts":[3,3,3,3,3,3,3,3,3,0,3,3,3,3]},{"total":3,"tier":"storage","counts":[3,3,3,3,3,3,3,2,3,0,3,3,3,3]}],"series":{"req_4xx":[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"snapshots_expired":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"commit_accumulate_ms":[null,null,null,null,null,1000.563,null,1000.55,1000.572,null,1000.598,1000.722,1000.692,1000.575],"rss_storage_min_mb":[412.5,412.2,412.5,374.1,373.9,373.5,373.3,356.5,2801.9,null,1720.8,3301.3,3765.8,4001.9],"gc_segments":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"bc_compaction":[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"hotread_retired_before_us":[null,11.327,11.251,11.393,12.139,12.974,12.222,14.485,14.444,null,18.257,17.768,17.492,16.621],"cpu_api_pct":[null,2.9,8.9,6.5,7.0,14.1,1.8,12.9,18.6,null,13.6,8.7,12.4,7.9],"rss_buffer_min_mb":[362.7,348.6,348.9,349.0,349.2,922.9,761.7,1345.5,1346.5,null,1441.7,1564.1,1683.0,1489.2],"rss_api_min_mb":[444.9,447.6,447.5,447.6,447.8,542.8,466.8,549.9,538.1,null,560.9,545.6,537.4,467.0],"seal_segs_err":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"rss_api_max_mb":[658.9,608.3,608.3,611.9,612.1,720.5,609.7,716.8,727.9,null,726.0,723.6,693.5,611.2],"rss_buffer_max_mb":[1075.8,1135.1,1072.0,1101.2,1098.2,2133.1,1624.0,2001.7,2265.9,null,2227.9,2339.0,2359.6,2121.7],"hot_segment_ms":[null,0.58,0.424,0.629,0.476,null,null,1.639,1.256,null,1.248,1.373,null,0.829],"hot_manifest_reqs":[null,9.0,18.0,18.0,36.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"rss_api_limit_mb":[3072.0,3072.0,3072.0,3072.0,3072.0,3072.0,3072.0,3072.0,3072.0,null,3072.0,3072.0,3072.0,3072.0],"compact_s":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"commits":[null,0.0,0.0,0.0,0.0,20.0,8.0,60.0,80.0,null,86.0,50.0,55.0,53.0],"commit_manifest_ms":[null,null,null,null,null,3.892,null,3.344,3.542,null,4.087,3.993,3.028,2.757],"hot_manifest_scoped_entries":[null,null,null,null,null,null,null,23.0,191.333,null,43.0,43.0,null,42.0],"hotread_entries_us":[null,2033.889,2218.667,1923.913,1959.583,2698.0,2644.0,2812.922,3856.338,null,4223.437,4541.549,4635.643,4954.459],"seal_segments_ok":[null,null,null,null,0.0,0.0,0.0,23.0,0.0,null,43.0,43.0,0.0,86.0],"inserts":[null,0.0,0.0,0.0,0.0,598.0,106.0,576.0,928.0,null,907.0,533.0,503.0,649.0],"hotread_entries_n":[null,9.0,18.0,23.0,36.0,56.0,10.0,64.0,80.0,null,87.0,51.0,56.0,61.0],"hotread_claimable_n":[null,136.0,172.0,156.0,291.0,276.0,195.0,247.0,338.0,null,250.0,163.0,155.0,301.0],"compactions_err":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"compact_replaced":[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"hotread_retired_before_n":[null,312.0,390.0,356.0,671.0,571.0,437.0,577.0,712.0,null,748.0,413.0,490.0,749.0],"req_2xx":[null,9.0,13.0,11.0,24.0,610.0,117.0,589.0,944.0,null,924.0,542.0,510.0,671.0],"parse_ms":[null,null,null,null,null,3.008,3.091,3.013,2.991,null,2.731,2.552,2.751,2.77],"hot_segment_kb":[null,5.461,5.461,5.461,5.461,null,null,382.305,334.195,null,307.646,361.974,null,387.78],"hot_manifest_scoped_reqs":[null,0.0,0.0,0.0,0.0,0.0,0.0,2.0,3.0,null,1.0,3.0,0.0,4.0],"rss_storage_limit_mb":[4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,null,4096.0,4096.0,4096.0,4096.0],"gc_staged":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"commits_err":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"hot_manifest_ms":[null,23.39,26.698,30.945,30.259,null,null,null,null,null,null,null,null,null],"rows_committed_s":[null,0.0,0.0,0.0,0.0,23293.1,8675.7,65322.7,84254.4,null,71996.3,40877.7,78014.4,35369.2],"seal_segments_err":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"cpu_buffer_pct":[null,2.4,6.4,5.2,5.1,32.4,4.5,31.6,44.2,null,36.9,21.2,39.1,18.0],"rows_accepted_s":[null,0.0,0.0,0.0,0.0,65395.6,10819.1,58790.4,91662.5,null,71211.1,40801.1,66964.6,40555.9],"commit_encode_ms":[null,null,null,null,null,317.899,null,353.16,366.875,null,376.18,385.944,366.699,364.259],"unattributed_ms":[null,null,null,null,null,963.4,null,939.9,937.8,null,936.4,914.1,939.6,940.1],"hot_range_responses":[null,489.0,978.0,977.0,1952.0,0.0,0.0,94.0,552.0,null,430.0,350.0,0.0,164.0],"commit_ms":[null,null,null,null,null,332.142,null,370.488,385.637,null,395.592,404.013,385.288,379.707],"compact_segs":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"hotread_claimable_entries":[null,0.095,0.097,0.036,0.0,4.009,3.454,4.4,13.09,null,2.654,10.818,0.0,6.023],"hot_segment_entries":[null,0.0,0.0,0.0,0.0,null,null,0.0,0.0,null,0.0,0.0,null,0.0],"seal_attempts_ok":[null,null,null,null,0.0,0.0,0.0,1.0,0.0,null,1.0,1.0,0.0,2.0],"seal_attempts_err":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"write_ms":[null,null,null,null,null,1295.516,1306.782,1310.354,1323.481,null,1331.995,1318.089,1324.865,1319.775],"req_5xx":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"rows_refused_s":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"hot_manifest_kb":[null,817.486,817.486,817.493,817.5,null,null,null,null,null,null,null,null,null],"rss_storage_max_mb":[4095.9,4096.0,4095.8,4084.9,4095.7,3632.9,3824.4,953.6,4096.0,null,4060.4,4095.9,4095.8,4095.8],"commit_queue_ms":[null,null,null,null,null,0.817,null,0.575,0.786,null,0.642,0.787,0.449,0.705],"hotindex_reap_lag":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"seal_ok_s":[null,null,null,null,null,null,null,11.489,null,null,34.3,58.11,null,47.536],"hotread_entries_entries":[null,108.667,108.667,106.391,108.667,175.75,167.5,185.219,220.875,null,240.862,259.137,289.071,294.328],"hot_segment_reqs":[null,1467.0,2934.0,2931.0,5856.0,0.0,0.0,186.0,1104.0,null,860.0,688.0,0.0,328.0],"jobs_done":[null,1.0,2.0,2.0,4.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"bc_seal":[null,null,null,null,0.0,0.0,0.0,1.0,0.0,null,1.0,1.0,0.0,2.0],"commit_replicate_ms":[null,null,null,null,null,10.351,null,13.984,15.22,null,15.325,14.075,15.561,12.691],"hotread_retired_before_entries":[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"compactions_ok":[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"rss_buffer_limit_mb":[4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,4096.0,null,4096.0,4096.0,4096.0,4096.0],"hotread_claimable_us":[null,19.919,19.047,18.545,17.632,119.583,62.318,119.008,259.994,null,66.432,179.282,23.394,138.648],"wire_remote_ms":[null,null,null,null,null,0.0,0.0,0.0,0.0,null,0.0,0.001,0.0,0.0],"hotindex_seal_lag":[null,null,null,null,0.0,80.0,16.0,51.0,161.0,null,85.0,13.0,111.0,-66.0],"hotindex_reaped":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"jobs_cancelled":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"seal_err_s":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"bc_commit":[null,0.0,0.0,0.0,0.0,20.0,8.0,60.0,80.0,null,86.0,50.0,55.0,53.0],"hot_manifest_entries":[null,162.833,108.667,108.667,108.667,null,null,null,null,null,null,null,null,null],"hotindex_retired":[null,null,null,null,0.0,0.0,0.0,69.0,0.0,null,86.0,86.0,0.0,172.0],"api_request_ms":[null,null,null,null,262.63,1362.617,1257.252,1373.171,1386.207,null,1376.705,1387.268,1373.423,1344.03],"jobs_error":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"cpu_storage_pct":[null,10.9,22.9,13.6,12.0,17.3,29.1,43.5,49.3,null,85.3,52.7,53.8,57.5],"seal_segs_ok":[null,null,null,null,null,null,null,23.0,null,null,43.0,43.0,null,43.0],"query_ms":[null,987.0,940.5,996.0,979.25,null,null,null,null,null,null,null,null,null],"hotindex_resident":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"hotindex_added":[null,0.0,0.0,0.0,0.0,80.0,16.0,120.0,161.0,null,171.0,99.0,111.0,106.0],"hot_manifest_scoped_ms":[null,null,null,null,null,null,null,0.511,3.739,null,0.799,1.271,null,0.833],"hotindex_recovered":[null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,0.0,0.0,0.0,0.0],"wire_local_ms":[null,null,null,null,null,null,null,null,null,null,null,null,null,null],"hot_manifest_scoped_kb":[null,null,null,null,null,null,null,9.109,74.466,null,17.029,17.029,null,16.633]},"phases":[null,"ingest","drain-vus32","drain-vus32","drain-vus32","ingest-vus32","ingest-vus32","ingest-vus32","ingest-vus32",null,"ingest-vus32","ingest-vus32","ingest-vus32","ingest-vus32"],"buckets":["02:57:00","02:57:30","02:58:00","02:58:30","02:59:00","02:59:30","03:00:00","03:00:30","03:01:00","03:01:30","03:02:00","03:02:30","03:03:00","03:03:30"],"voids":[0,9],"resetMinutes":["02:57:30","02:59:00","03:00:00","03:02:00","03:02:30","03:03:00","03:03:30","02:58:00","02:58:30","03:01:00","02:59:30","03:00:30"],"sections":[{"id":"points","blocks":[{"columns":["point","load","rows/s","MiB/s","requests","refused","p50·ms","p95·ms","p99·ms","buffer RSS peak MB","storage RSS peak MB","cluster CPU avg %"],"rows":[{"cells":["loadgen-vus32-vu32-100mb","32 VUs","69283","155.3","4096","0","1406","1559","1635","2486","4096","250"]}],"kind":"table"}],"title":"What k6 offered, and what the pods paid","eyebrow":"01 · load points","intro":"One row per <span class=\"mono\">*.k6.json<\/span> whose timestamp falls inside this run's sampling window. RSS and CPU come from the matching <span class=\"mono\">*.pods.json<\/span>, which samples the container, not the counters."},{"id":"throughput","blocks":[{"unit":"rows per second · summed over pods","title":"Row throughput","kind":"panel","chart":{"type":"line","h":210,"series":[{"name":"accepted","c":"s1","key":"rows_accepted_s"},{"name":"committed","c":"s2","key":"rows_committed_s"},{"name":"refused by admission","c":"s3","key":"rows_refused_s"}],"fmt":"rows"},"note":"A shaded bucket is one the sampler never covered. A dash in the table is the same thing, or a bucket dropped for a counter reset or too few operations."},{"unit":"requests per bucket · stacked","title":"API responses","kind":"panel","chart":{"type":"sbars","h":200,"series":[{"name":"2xx accepted","c":"good","key":"req_2xx"},{"name":"4xx refused","c":"warn","key":"req_4xx"},{"name":"5xx failed","c":"crit","key":"req_5xx"}],"fmt":"req"},"note":"A 4xx is admission control shedding load on purpose. A 5xx is the tier failing. A run that fails without refusing is the shape to look for."},{"unit":"per bucket · a triangle marks a counter reset","title":"Pods answering a scrape","kind":"strip","note":"A counter that falls between scrapes means the pod restarted. The sampler catches OOMKills this way that the log watcher misses. Pod totals are the distinct pods seen anywhere in the run (30s buckets)."}],"title":"Rows in, rows committed, and what the api tier answered","eyebrow":"02 · throughput","intro":"Accepted counts rows the api tier took from k6. Committed counts rows the buffer tier durably wrote. The two track each other when nothing is lost in flight."},{"id":"pipeline","blocks":[{"unit":"milliseconds","title":"Ingest stage time, per insert","kind":"panel","chart":{"type":"line","series":[{"name":"request total","c":"s1","key":"api_request_ms"},{"name":"write phase","c":"s2","key":"write_ms"},{"name":"buffer commit","c":"s3","key":"commit_ms"},{"name":"parse phase","c":"s4","key":"parse_ms"},{"name":"write minus commit","c":"s8","key":"unattributed_ms"}],"fmt":"ms"},"note":"Parse and write are measured on the api pods over inserts; commit is measured on the buffer pods over commits. The two denominators are comparable only while inserts and commits track 1:1 — check the table below before reading <em>write minus commit<\/em> as the unattributed span."},{"unit":"milliseconds · stacked","title":"Commit phase time, per commit","kind":"panel","chart":{"type":"stack","valid":"commit_ms","series":[{"name":"encode","c":"s1","key":"commit_encode_ms"},{"name":"queue","c":"s2","key":"commit_queue_ms"},{"name":"replicate","c":"s3","key":"commit_replicate_ms"},{"name":"manifest","c":"s4","key":"commit_manifest_ms"},{"name":"accumulate","c":"s5","key":"commit_accumulate_ms"}],"fmt":"ms"},"note":"The five phases sum to the commit total. Queue time falling while the total rises means the buffer is starved, not backed up."},{"k":"the wire counter is not carrying the transport","text":"<span class=\"mono\">smolquery_buffer_wire_microseconds_total<\/span> stayed under half a millisecond per insert for this whole run. Whatever the write phase waits on, this counter is not measuring it, so the gap between the write phase and the buffer commit has no attribution.","kind":"callout","tone":"crit"}],"title":"Where an insert spends its time","eyebrow":"03 · ingest pipeline","intro":"Every stage the pipeline instruments, divided by the operations that passed through it."},{"id":"resources","blocks":[{"unit":"MB · busiest and quietest pod, against the container limit","title":"Buffer tier memory","kind":"panel","chart":{"type":"line","h":220,"series":[{"name":"busiest buffer pod","c":"s8","key":"rss_buffer_max_mb"},{"name":"quietest buffer pod","c":"s1","key":"rss_buffer_min_mb"},{"name":"container limit","c":"s4","key":"rss_buffer_limit_mb"}],"fmt":"int"},"note":"The stability test: flat or falling over the second half of a hold is sustainable, a rising trend is not, however far the peak stays below the limit.","emptyNote":"This run predates cgroup sampling in the metrics database."},{"unit":"MB · busiest pod per tier","title":"Storage and api memory","kind":"panel","chart":{"type":"line","h":200,"series":[{"name":"busiest storage pod","c":"s2","key":"rss_storage_max_mb"},{"name":"storage limit","c":"s4","key":"rss_storage_limit_mb"},{"name":"busiest api pod","c":"s3","key":"rss_api_max_mb"}],"fmt":"int"},"emptyNote":"This run predates cgroup sampling in the metrics database."},{"unit":"percent of one core · summed across the tier's pods","title":"CPU by tier","kind":"panel","chart":{"type":"line","h":200,"series":[{"name":"buffer","c":"s1","key":"cpu_buffer_pct"},{"name":"storage","c":"s2","key":"cpu_storage_pct"},{"name":"api","c":"s3","key":"cpu_api_pct"}],"fmt":"num"},"emptyNote":"This run predates cgroup sampling in the metrics database."}],"title":"Memory and CPU, read from each pod's own cgroup","eyebrow":"04 · pod resources","intro":"Counters cannot say whether a tier is stable. A pod at 3.9 GiB and climbing looks identical to one at 1.2 GiB and flat until the moment it OOMs. These come from <span class=\"mono\">/sys/fs/cgroup<\/span> in the same scrape as the counters, so memory and work share one timeline."},{"id":"hot","blocks":[{"unit":"KB per request · by route","title":"Bytes per hot-tier request","kind":"panel","chart":{"type":"line","h":210,"series":[{"name":"manifest (get)","c":"s1","key":"hot_manifest_kb"},{"name":"manifest scoped (post)","c":"s3","key":"hot_manifest_scoped_kb"},{"name":"segment","c":"s2","key":"hot_segment_kb"}],"fmt":"num"},"note":"The series that prices an O(backlog) manifest. A scoped fetch should stay flat as the backlog grows; an unscoped one should not.","emptyNote":"This build serves no hot-tier telemetry (added by T-315)."},{"unit":"manifest entries per request","title":"Entries per manifest response","kind":"panel","chart":{"type":"line","h":200,"series":[{"name":"manifest (get)","c":"s1","key":"hot_manifest_entries"},{"name":"manifest scoped (post)","c":"s3","key":"hot_manifest_scoped_entries"}],"fmt":"num"},"note":"A scoped fetch is bounded by the claim valve — 16 x seal_max_files. An unscoped one returns the whole hot tier.","emptyNote":"This build serves no hot-tier telemetry (added by T-315)."},{"unit":"milliseconds · by route","title":"Time per hot-tier request","kind":"panel","chart":{"type":"line","h":200,"series":[{"name":"manifest (get)","c":"s1","key":"hot_manifest_ms"},{"name":"manifest scoped (post)","c":"s3","key":"hot_manifest_scoped_ms"},{"name":"segment","c":"s2","key":"hot_segment_ms"}],"fmt":"ms"},"emptyNote":"This build serves no hot-tier telemetry (added by T-315)."},{"unit":"requests · by route","title":"Hot-tier requests per bucket","kind":"panel","chart":{"type":"bars","h":190,"series":[{"name":"manifest (get)","c":"s1","key":"hot_manifest_reqs"},{"name":"manifest scoped (post)","c":"s3","key":"hot_manifest_scoped_reqs"},{"name":"segment","c":"s2","key":"hot_segment_reqs"},{"name":"range responses","c":"s4","key":"hot_range_responses"}],"fmt":"int"},"note":"One DuckDB read_parquet input is a HEAD plus several ranged GETs, so segment requests price inputs, not files.","emptyNote":"This build serves no hot-tier telemetry (added by T-315)."},{"unit":"entries per bucket","title":"Manifest index churn","kind":"panel","chart":{"type":"bars","h":200,"series":[{"name":"added","c":"s1","key":"hotindex_added"},{"name":"retired","c":"s3","key":"hotindex_retired"},{"name":"reaped","c":"s2","key":"hotindex_reaped"},{"name":"recovered","c":"s4","key":"hotindex_recovered"}],"fmt":"int"},"emptyNote":"This build does not report manifest index churn (added by T-320)."},{"unit":"entries per bucket · T-320","title":"Is the hot tier in steady state?","kind":"panel","chart":{"type":"line","h":210,"series":[{"name":"resident growth","c":"s1","key":"hotindex_resident"},{"name":"seal lag (added - retired)","c":"s8","key":"hotindex_seal_lag"},{"name":"reap lag (retired - reaped)","c":"s4","key":"hotindex_reap_lag"}],"fmt":"int"},"note":"Resident entries are added + recovered - reaped. Seal lag above zero means sealing is not keeping pace, the one condition under which nothing is ever reaped and the index grows without bound. Reap lag is normal for retire_grace_ms and abnormal after it.","emptyNote":"This build does not report manifest index churn (added by T-320)."},{"unit":"microseconds · by operation","title":"HotManifest read cost, per read","kind":"panel","chart":{"type":"line","h":190,"series":[{"name":"entries","c":"s1","key":"hotread_entries_us"},{"name":"claimable","c":"s2","key":"hotread_claimable_us"},{"name":"retired_before","c":"s3","key":"hotread_retired_before_us"}],"fmt":"num"},"note":"ETS read cost inside the buffer (T-318). A read whose cost tracks the backlog is a read on the commit path worth scoping.","emptyNote":"This build does not report HotManifest read cost (added by T-318)."}],"title":"What the sealer and the query planner pull off the buffer pods","eyebrow":"04 · hot tier reads","intro":"Micro-segments live on the buffer node's own disk, so everything outside the buffer service reads them over HTTP from <span class=\"mono\">BufferService.HotServer<\/span> — the sealer pulling a claim's inputs, the planner unioning the hot tier into a plan. The segment route is cheap; a manifest response grows with the backlog unless the caller scopes it."},{"id":"seal","blocks":[{"kind":"duo","panels":[{"unit":"seconds","title":"Time per seal attempt","kind":"panel","chart":{"type":"bars","h":190,"wide":false,"series":[{"name":"succeeded","c":"s1","key":"seal_ok_s"},{"name":"errored","c":"s8","key":"seal_err_s"}],"fmt":"s"}},{"unit":"segments","title":"Segments per seal attempt","kind":"panel","chart":{"type":"bars","h":190,"wide":false,"series":[{"name":"succeeded","c":"s1","key":"seal_segs_ok"},{"name":"errored","c":"s8","key":"seal_segs_err"}],"fmt":"num"},"note":"A failed batch that always lands on the same round number is a fixed batch size, not a coincidence."}]},{"unit":"attempts and segments","title":"Seal work per bucket","kind":"panel","chart":{"type":"bars","h":200,"series":[{"name":"segments sealed","c":"s1","key":"seal_segments_ok"},{"name":"segments in failed batches","c":"s8","key":"seal_segments_err"},{"name":"attempts ok","c":"s3","key":"seal_attempts_ok"},{"name":"attempts errored","c":"s4","key":"seal_attempts_err"}],"fmt":"int"}}],"title":"Moving the hot tier into sealed Parquet","eyebrow":"04 · seal","intro":"A seal attempt takes a share of the hot backlog and writes it out. Watch time per attempt against segments per attempt: if the first grows faster than the second, the batch is unbounded."},{"id":"compaction","blocks":[{"kind":"duo","panels":[{"unit":"seconds","title":"Time per compaction","kind":"panel","chart":{"type":"bars","h":190,"wide":false,"series":[{"name":"compaction","c":"s1","key":"compact_s"}],"fmt":"s"},"emptyNote":"No compaction completed while the sampler ran."},{"unit":"segments","title":"Segments replaced per compaction","kind":"panel","chart":{"type":"bars","h":190,"wide":false,"series":[{"name":"segments","c":"s1","key":"compact_segs"}],"fmt":"num"},"emptyNote":"No compaction completed while the sampler ran."}]},{"unit":"compactions and segments","title":"Compaction work per bucket","kind":"panel","chart":{"type":"bars","h":200,"series":[{"name":"compactions ok","c":"s1","key":"compactions_ok"},{"name":"compactions errored","c":"s8","key":"compactions_err"},{"name":"segments replaced","c":"s3","key":"compact_replaced"}],"fmt":"int"},"emptyNote":"No compaction counter moved while the sampler ran."}],"title":"Merging sealed segments","eyebrow":"05 · compaction"},{"id":"housekeeping","blocks":[{"unit":"per bucket","title":"Garbage collection and snapshots","kind":"panel","chart":{"type":"bars","h":190,"series":[{"name":"segments swept","c":"s1","key":"gc_segments"},{"name":"staged files swept","c":"s2","key":"gc_staged"},{"name":"snapshots expired","c":"s3","key":"snapshots_expired"}],"fmt":"int"}},{"unit":"per bucket","title":"Lifecycle broadcasts","kind":"panel","chart":{"type":"bars","h":190,"series":[{"name":"commit","c":"s1","key":"bc_commit"},{"name":"seal","c":"s2","key":"bc_seal"},{"name":"compaction","c":"s3","key":"bc_compaction"}],"fmt":"int"}},{"unit":"per bucket","title":"Query jobs","kind":"panel","chart":{"type":"bars","h":190,"series":[{"name":"done","c":"s1","key":"jobs_done"},{"name":"errored","c":"s8","key":"jobs_error"},{"name":"cancelled","c":"s4","key":"jobs_cancelled"}],"fmt":"int"},"emptyNote":"No query job finished while the sampler ran."}],"title":"Sweeps, snapshots, broadcasts, and queries","eyebrow":"06 · housekeeping","intro":"The background work that competes with ingest for the same pods."},{"id":"data","blocks":[{"columns":["series","02:57:00","02:57:30","02:58:00","02:58:30","02:59:00","02:59:30","03:00:00","03:00:30","03:01:00","03:01:30","03:02:00","03:02:30","03:03:00","03:03:30"],"rows":[{"group":"Ingest pipeline, ms per insert"},{"cells":["request total",null,null,null,null,"263","1363","1257","1373","1386",null,"1377","1387","1373","1344"]},{"cells":["parse phase",null,null,null,null,null,"3.0","3.1","3.0","3.0",null,"2.7","2.6","2.8","2.8"]},{"cells":["write phase",null,null,null,null,null,"1296","1307","1310","1323",null,"1332","1318","1325","1320"]},{"cells":["write minus commit",null,null,null,null,null,"963",null,"940","938",null,"936","914","940","940"]},{"cells":["wire remote",null,null,null,null,null,"0","0","0","0",null,"0","0.001","0","0"]},{"group":"Buffer commit, ms per commit"},{"cells":["commit total",null,null,null,null,null,"332",null,"370","386",null,"396","404","385","380"]},{"cells":["encode",null,null,null,null,null,"318",null,"353","367",null,"376","386","367","364"]},{"cells":["queue",null,null,null,null,null,"0.817",null,"0.575","0.786",null,"0.642","0.787","0.449","0.705"]},{"cells":["replicate",null,null,null,null,null,"10.4",null,"14.0","15.2",null,"15.3","14.1","15.6","12.7"]},{"cells":["manifest",null,null,null,null,null,"3.9",null,"3.3","3.5",null,"4.1","4.0","3.0","2.8"]},{"cells":["accumulate",null,null,null,null,null,"1001",null,"1001","1001",null,"1001","1001","1001","1001"]},{"group":"Throughput"},{"cells":["rows accepted / s",null,"0","0","0","0","65396","10819","58790","91663",null,"71211","40801","66965","40556"]},{"cells":["rows committed / s",null,"0","0","0","0","23293","8676","65323","84254",null,"71996","40878","78014","35369"]},{"cells":["inserts",null,"0","0","0","0","598","106","576","928",null,"907","533","503","649"]},{"cells":["commits ok + error",null,"0","0","0","0","20","8","60","80",null,"86","50","55","53"]},{"group":"API responses"},{"cells":["2xx",null,"9","13","11","24","610","117","589","944",null,"924","542","510","671"]},{"cells":["4xx",null,"0","0","0","0","0","0","0","0",null,"0","0","0","0"]},{"group":"Seal"},{"cells":["seconds per attempt ok",null,null,null,null,null,null,null,"11.5",null,null,"34.3","58.1",null,"47.5"]},{"cells":["segments per attempt ok",null,null,null,null,null,null,null,"23",null,null,"43","43",null,"43"]},{"cells":["attempts ok",null,null,null,null,"0","0","0","1","0",null,"1","1","0","2"]},{"cells":["segments sealed",null,null,null,null,"0","0","0","23","0",null,"43","43","0","86"]},{"group":"Pod resources"},{"cells":["buffer RSS max MB","1076","1135","1072","1101","1098","2133","1624","2002","2266",null,"2228","2339","2360","2122"]},{"cells":["buffer RSS min MB","363","349","349","349","349","923","762","1346","1347",null,"1442","1564","1683","1489"]},{"cells":["buffer limit MB","4096","4096","4096","4096","4096","4096","4096","4096","4096",null,"4096","4096","4096","4096"]},{"cells":["storage RSS max MB","4096","4096","4096","4085","4096","3633","3824","954","4096",null,"4060","4096","4096","4096"]},{"cells":["api RSS max MB","659","608","608","612","612","721","610","717","728",null,"726","724","694","611"]},{"cells":["buffer CPU %",null,"2.4","6.4","5.2","5.1","32.4","4.5","31.6","44.2",null,"36.9","21.2","39.1","18"]},{"cells":["storage CPU %",null,"10.9","22.9","13.6","12","17.3","29.1","43.5","49.3",null,"85.3","52.7","53.8","57.5"]},{"cells":["api CPU %",null,"2.9","8.9","6.5","7","14.1","1.8","12.9","18.6",null,"13.6","8.7","12.4","7.9"]},{"group":"Hot tier reads"},{"cells":["KB per manifest get",null,"817","817","817","818",null,null,null,null,null,null,null,null,null]},{"cells":["KB per manifest scoped post",null,null,null,null,null,null,null,"9.1","74.5",null,"17.0","17.0",null,"16.6"]},{"cells":["KB per segment request",null,"5.5","5.5","5.5","5.5",null,null,"382","334",null,"308","362",null,"388"]},{"cells":["entries per manifest get",null,"163","109","109","109",null,null,null,null,null,null,null,null,null]},{"cells":["entries per scoped post",null,null,null,null,null,null,null,"23","191",null,"43","43",null,"42"]},{"cells":["ms per manifest get",null,"23.4","26.7","30.9","30.3",null,null,null,null,null,null,null,null,null]},{"cells":["ms per scoped post",null,null,null,null,null,null,null,"0.511","3.7",null,"0.799","1.3",null,"0.833"]},{"cells":["ms per segment request",null,"0.580","0.424","0.629","0.476",null,null,"1.6","1.3",null,"1.2","1.4",null,"0.829"]},{"cells":["manifest gets",null,"9","18","18","36","0","0","0","0",null,"0","0","0","0"]},{"cells":["scoped posts",null,"0","0","0","0","0","0","2","3",null,"1","3","0","4"]},{"cells":["segment requests",null,"1467","2934","2931","5856","0","0","186","1104",null,"860","688","0","328"]},{"cells":["range responses",null,"489","978","977","1952","0","0","94","552",null,"430","350","0","164"]},{"cells":["index entries added",null,"0","0","0","0","80","16","120","161",null,"171","99","111","106"]},{"cells":["index entries retired",null,null,null,null,"0","0","0","69","0",null,"86","86","0","172"]},{"cells":["index entries recovered",null,"0","0","0","0","0","0","0","0",null,"0","0","0","0"]},{"cells":["index seal lag",null,null,null,null,"0","80","16","51","161",null,"85","13","111","-66"]},{"cells":["us per entries read",null,"2034","2219","1924","1960","2698","2644","2813","3856",null,"4223","4542","4636","4954"]},{"cells":["us per claimable read",null,"19.9","19.0","18.5","17.6","120","62.3","119","260",null,"66.4","179","23.4","139"]},{"cells":["us per retired_before read",null,"11.3","11.3","11.4","12.1","13.0","12.2","14.5","14.4",null,"18.3","17.8","17.5","16.6"]},{"cells":["entries per entries read",null,"109","109","106","109","176","168","185","221",null,"241","259","289","294"]},{"cells":["entries per claimable read",null,"0.095","0.097","0.036","0","4.0","3.5","4.4","13.1",null,"2.7","10.8","0","6.0"]},{"cells":["entries reads",null,"9","18","23","36","56","10","64","80",null,"87","51","56","61"]},{"cells":["claimable reads",null,"136","172","156","291","276","195","247","338",null,"250","163","155","301"]},{"cells":["retired_before reads",null,"312","390","356","671","571","437","577","712",null,"748","413","490","749"]},{"group":"Compaction"},{"cells":["compactions ok",null,"0","0","0","0","0","0","0","0",null,"0","0","0","0"]},{"cells":["segments replaced",null,"0","0","0","0","0","0","0","0",null,"0","0","0","0"]},{"group":"Housekeeping"},{"cells":["broadcasts commit",null,"0","0","0","0","20","8","60","80",null,"86","50","55","53"]},{"cells":["broadcasts seal",null,null,null,null,"0","0","0","1","0",null,"1","1","0","2"]},{"cells":["broadcasts compaction",null,"0","0","0","0","0","0","0","0",null,"0","0","0","0"]},{"group":"Query jobs"},{"cells":["ms per finished job",null,"987","941","996","979",null,null,null,null,null,null,null,null,null]},{"cells":["done",null,"1","2","2","4","0","0","0","0",null,"0","0","0","0"]}],"kind":"table"}],"title":"The full bucketed table","eyebrow":"08 · every series","intro":"A shaded bucket is one the sampler never covered. A dash in the table is the same thing, or a bucket dropped for a counter reset or too few operations. A series that never moved is left out of this table entirely."}]};
+const B = D.buckets, S = D.series, N = B.length;
+const NS = "http://www.w3.org/2000/svg";
+const VOID = new Set(D.voids);
+const RESET = new Set(D.resetMinutes);
+
+const el = (n, a, t) => {
+  const e = document.createElementNS(NS, n);
+  for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]);
+  if (t != null) e.textContent = t;
+  return e;
+};
+const h = (n, a, t) => {
+  const e = document.createElement(n);
+  for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]);
+  if (t != null) e.textContent = t;
+  return e;
+};
+
+const int = v => Math.round(v).toLocaleString("en-US");
+const short = v => Math.abs(v) >= 1e6 ? +(v / 1e6).toFixed(1) + "M"
+  : Math.abs(v) >= 1000 ? +(v / 1000).toFixed(Math.abs(v) < 10000 ? 1 : 0) + "k"
+  : +v.toFixed(v < 10 && v % 1 ? 1 : 0) + "";
+
+const FMT = {
+  ms: { ax: v => v >= 1000 ? +(v / 1000).toFixed(2) + "s" : short(v), tip: v => v >= 1000 ? (v / 1000).toFixed(2) + " s" : v.toFixed(v < 10 ? 2 : 0) + " ms" },
+  s: { ax: v => short(v) + "s", tip: v => v.toFixed(v < 10 ? 2 : 1) + " s" },
+  rows: { ax: short, tip: v => int(v) + " rows/s" },
+  req: { ax: short, tip: v => int(v) + " req" },
+  int: { ax: short, tip: int },
+  num: { ax: short, tip: v => (v % 1 ? v.toFixed(1) : int(v)) }
+};
+
+const charts = [];
+const tt = document.getElementById("tt");
+
+/* ---------------------------------------------------------------- charts */
+
+function mount(host, spec) {
+  const inst = { host, spec, hover: () => {} };
+  charts.push(inst);
+  const draw = () => {
+    host.textContent = "";
+    host.appendChild(render(Math.max(320, host.clientWidth), spec, inst));
+  };
+  draw();
+  new ResizeObserver(() => { clearTimeout(inst.t); inst.t = setTimeout(draw, 60); }).observe(host);
+  wire(inst);
+  return inst;
+}
+
+function render(W, spec, inst) {
+  const wide = spec.wide !== false;
+  const P = wide ? { l: 60, r: spec.type === "line" ? 92 : 22, t: 16, b: 30 }
+    : { l: 48, r: 16, t: 16, b: 30 };
+  const H = spec.h || 232;
+  const pw = W - P.l - P.r, ph = H - P.t - P.b;
+  const bw = pw / N, cx = i => P.l + (i + 0.5) * bw;
+  const cols = spec.series.map(s => S[s.key] || new Array(N).fill(null));
+  const fmt = FMT[spec.fmt] || FMT.num;
+
+  let vmax = 0;
+  if (spec.type === "stack" || spec.type === "sbars") {
+    for (let i = 0; i < N; i++) { let a = 0; for (const c of cols) a += c[i] || 0; if (a > vmax) vmax = a; }
+  } else {
+    for (const c of cols) for (const v of c) if (v != null && v > vmax) vmax = v;
+  }
+  const tk = ticks(vmax), ymax = tk[tk.length - 1];
+  const y = v => P.t + ph - (v / ymax) * ph;
+
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": spec.aria || spec.title });
+
+  // unsampled buckets
+  let run = null;
+  for (let i = 0; i <= N; i++) {
+    if (i < N && VOID.has(i)) { if (run == null) run = i; continue; }
+    if (run != null) {
+      svg.appendChild(el("rect", { x: cx(run) - bw / 2, y: P.t, width: bw * (i - run), height: ph, style: "fill:var(--void)" }));
+      if (i - run >= 2) {
+        svg.appendChild(el("text", {
+          x: cx((run + i - 1) / 2), y: P.t + 12, "text-anchor": "middle",
+          style: "fill:var(--ink-3);font:500 9.5px 'IBM Plex Mono',monospace;letter-spacing:.09em"
+        }, "NO SCRAPE"));
+      }
+      run = null;
+    }
+  }
+
+  for (const t of tk) {
+    svg.appendChild(el("line", { x1: P.l, x2: W - P.r, y1: y(t), y2: y(t), style: `stroke:var(--${t === 0 ? "axis" : "grid"});stroke-width:1` }));
+    svg.appendChild(el("text", { x: P.l - 9, y: y(t) + 3.5, "text-anchor": "end", style: "fill:var(--ink-3);font:400 10.5px 'IBM Plex Mono',monospace" }, fmt.ax(t)));
+  }
+
+  const every = Math.ceil(46 / bw);
+  for (let i = 0; i < N; i++) {
+    if (i % every) continue;
+    svg.appendChild(el("text", { x: cx(i), y: H - 10, "text-anchor": "middle", style: "fill:var(--ink-3);font:400 10.5px 'IBM Plex Mono',monospace" }, B[i]));
+  }
+
+  const marks = el("g");
+  svg.appendChild(marks);
+  const ok = i => (spec.valid ? S[spec.valid] && S[spec.valid][i] != null : true);
+
+  if (spec.type === "stack") {
+    const base = new Array(N).fill(0);
+    spec.series.forEach((s, si) => {
+      const c = cols[si];
+      for (const seg of runs(i => ok(i) && c[i] != null)) {
+        if (seg.length < 2) continue;
+        let d = seg.map((i, k) => (k ? "L" : "M") + cx(i).toFixed(1) + " " + y(base[i] + c[i]).toFixed(1)).join("");
+        for (let k = seg.length - 1; k >= 0; k--) d += "L" + cx(seg[k]).toFixed(1) + " " + y(base[seg[k]]).toFixed(1);
+        marks.appendChild(el("path", { d: d + "Z", style: `fill:var(--${s.c});fill-opacity:.9;stroke:var(--surface);stroke-width:2;stroke-linejoin:round` }));
+      }
+      for (let i = 0; i < N; i++) base[i] += c[i] || 0;
+    });
+  } else if (spec.type === "sbars") {
+    const w = Math.min(26, bw * 0.6);
+    for (let i = 0; i < N; i++) {
+      let acc = 0;
+      if (!cols.some(c => c[i] != null)) continue;
+      spec.series.forEach((s, si) => {
+        const v = cols[si][i];
+        if (v == null || v <= 0) return;
+        const yt = y(acc + v), yb = y(acc);
+        marks.appendChild(el("rect", { x: cx(i) - w / 2, y: yt, width: w, height: Math.max(1.5, yb - yt - 1.5), rx: 2, style: `fill:var(--${s.c})` }));
+        acc += v;
+      });
+    }
+  } else if (spec.type === "bars") {
+    const n = spec.series.length;
+    const gw = Math.min(30, bw * 0.68), w = Math.max(2, gw / n - (n > 1 ? 2 : 0));
+    spec.series.forEach((s, si) => {
+      const c = cols[si];
+      for (let i = 0; i < N; i++) {
+        if (c[i] == null || c[i] <= 0) continue;
+        const x = cx(i) - gw / 2 + si * (gw / n);
+        marks.appendChild(el("rect", { x, y: y(c[i]), width: w, height: Math.max(1.5, ph - (y(c[i]) - P.t)), rx: 2, style: `fill:var(--${s.c})` }));
+      }
+    });
+  } else {
+    const ends = [];
+    spec.series.forEach((s, si) => {
+      const c = cols[si];
+      const segs = runs(i => c[i] != null);
+      for (const seg of segs) {
+        if (seg.length === 1) { marks.appendChild(el("circle", { cx: cx(seg[0]), cy: y(c[seg[0]]), r: 3.2, style: `fill:var(--${s.c})` })); continue; }
+        marks.appendChild(el("path", {
+          d: seg.map((i, k) => (k ? "L" : "M") + cx(i).toFixed(1) + " " + y(c[i]).toFixed(1)).join(""),
+          style: `fill:none;stroke:var(--${s.c});stroke-width:2;stroke-linejoin:round;stroke-linecap:round`
+        }));
+      }
+      const tail = segs[segs.length - 1];
+      if (tail && P.r > 40) ends.push({ s, i: tail[tail.length - 1], y: y(c[tail[tail.length - 1]]) });
+    });
+    ends.sort((a, b) => a.y - b.y);
+    for (let k = 1; k < ends.length; k++) if (ends[k].y - ends[k - 1].y < 13) ends[k].y = ends[k - 1].y + 13;
+    for (const e of ends) {
+      marks.appendChild(el("circle", { cx: cx(e.i), cy: y(S[e.s.key][e.i]), r: 3.4, style: `fill:var(--${e.s.c});stroke:var(--surface);stroke-width:2` }));
+      marks.appendChild(el("text", { x: Math.min(cx(e.i) + 9, W - P.r + 6), y: e.y + 3.5, style: "fill:var(--ink-2);font:500 11px 'IBM Plex Sans',sans-serif" }, e.s.name));
+    }
+  }
+
+  const cross = el("line", { y1: P.t, y2: P.t + ph, style: "stroke:var(--ink-3);stroke-width:1;stroke-dasharray:3 3;opacity:0" });
+  const dots = el("g", { style: "opacity:0" });
+  svg.appendChild(cross);
+  svg.appendChild(dots);
+
+  inst.hover = i => {
+    if (i == null) { cross.style.opacity = 0; dots.style.opacity = 0; return; }
+    cross.setAttribute("x1", cx(i));
+    cross.setAttribute("x2", cx(i));
+    cross.style.opacity = 0.7;
+    dots.textContent = "";
+    if (spec.type === "line") {
+      spec.series.forEach((s, si) => {
+        const v = cols[si][i];
+        if (v != null) dots.appendChild(el("circle", { cx: cx(i), cy: y(v), r: 4, style: `fill:var(--${s.c});stroke:var(--surface);stroke-width:2` }));
+      });
+    }
+    dots.style.opacity = 1;
+  };
+  inst.idx = px => Math.max(0, Math.min(N - 1, Math.floor((px - P.l) / bw)));
+  return svg;
+
+  function runs(pred) {
+    const out = [];
+    let cur = [];
+    for (let i = 0; i < N; i++) {
+      if (pred(i)) cur.push(i);
+      else if (cur.length) { out.push(cur); cur = []; }
+    }
+    if (cur.length) out.push(cur);
+    return out;
+  }
+}
+
+function ticks(max) {
+  if (!(max > 0)) return [0, 1];
+  const raw = max / 4, p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].find(x => x * p >= raw - 1e-9) * p;
+  const out = [];
+  for (let v = 0; v <= max * 1.0001 + step * 0.001; v += step) out.push(+v.toFixed(10));
+  if (out[out.length - 1] < max) out.push(+(out[out.length - 1] + step).toFixed(10));
+  return out;
+}
+
+function tip(i, spec) {
+  const fmt = FMT[spec.fmt] || FMT.num;
+  let s = `<div class="t">${B[i]}${D.phases[i] ? " &middot; " + D.phases[i] : ""}</div>`;
+  let any = false;
+  for (const q of spec.series) {
+    const v = (S[q.key] || [])[i];
+    s += `<div class="r"><span><i style="background:var(--${q.c})"></i>${q.name}</span><b>${v == null ? "&mdash;" : fmt.tip(v)}</b></div>`;
+    if (v != null) any = true;
+  }
+  if (!any) s += `<div class="r" style="color:var(--ink-3)">no usable sample</div>`;
+  return s;
+}
+
+function wire(inst) {
+  const move = ev => {
+    const r = inst.host.getBoundingClientRect();
+    const svg = inst.host.querySelector("svg");
+    if (!svg) return;
+    const i = inst.idx((ev.clientX - r.left) * (svg.viewBox.baseVal.width / r.width));
+    for (const c of charts) if (c.spec.wide !== false) c.hover(i);
+    if (inst.spec.wide === false) inst.hover(i);
+    tt.innerHTML = tip(i, inst.spec);
+    tt.style.opacity = 1;
+    tt.style.left = Math.min(window.innerWidth - tt.offsetWidth - 12, Math.max(8, ev.clientX + 16)) + "px";
+    tt.style.top = Math.min(window.innerHeight - tt.offsetHeight - 12, Math.max(8, ev.clientY - tt.offsetHeight - 14)) + "px";
+  };
+  inst.host.addEventListener("pointermove", move);
+  inst.host.addEventListener("pointerleave", () => { for (const c of charts) c.hover(null); tt.style.opacity = 0; });
+}
+
+/* ------------------------------------------------------------- liveness */
+
+function strip(host) {
+  const draw = () => {
+    const W = Math.max(320, host.clientWidth), rows = D.liveness;
+    const P = { l: 60, r: 22 }, rh = 19, H = rows.length * rh + 20;
+    const pw = W - P.l - P.r, bw = pw / N, cx = i => P.l + (i + 0.5) * bw;
+    host.textContent = "";
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Pods answering a scrape per tier, and counter resets" });
+    rows.forEach((row, r) => {
+      const yy = 4 + r * rh;
+      svg.appendChild(el("text", { x: P.l - 9, y: yy + 11, "text-anchor": "end", style: "fill:var(--ink-3);font:400 10.5px 'IBM Plex Mono',monospace" }, row.tier));
+      for (let i = 0; i < N; i++) {
+        const n = row.counts[i], w = Math.min(24, bw * 0.62);
+        const tone = n === 0 ? "crit" : n === row.total ? "good" : "warn";
+        svg.appendChild(el("rect", { x: cx(i) - w / 2, y: yy + 1, width: w, height: 13, rx: 2, style: `fill:var(--${tone});fill-opacity:.82` }));
+        svg.appendChild(el("text", { x: cx(i), y: yy + 11, "text-anchor": "middle", style: "fill:var(--surface);font:600 9px 'IBM Plex Mono',monospace" }, String(n)));
+      }
+    });
+    const yy = 4 + rows.length * rh;
+    for (let i = 0; i < N; i++) {
+      if (!RESET.has(B[i])) continue;
+      svg.appendChild(el("path", { d: `M${cx(i)} ${yy + 2} l4.5 8 h-9 Z`, style: "fill:var(--crit)" }));
+    }
+    svg.appendChild(el("text", { x: P.l - 9, y: yy + 11, "text-anchor": "end", style: "fill:var(--ink-3);font:400 10.5px 'IBM Plex Mono',monospace" }, "reset"));
+    host.appendChild(svg);
+  };
+  draw();
+  new ResizeObserver(() => { clearTimeout(host._t); host._t = setTimeout(draw, 60); }).observe(host);
+}
+
+/* ---------------------------------------------------------------- build */
+
+function legendOf(series) {
+  const box = h("div", { class: "legend" });
+  for (const s of series) {
+    const sp = h("span", { class: "lg" });
+    sp.appendChild(h("i", { class: s.line ? "ln" : "", style: `background:var(--${s.c})` }));
+    sp.appendChild(document.createTextNode(s.name));
+    box.appendChild(sp);
+  }
+  return box;
+}
+
+function panelOf(p) {
+  const box = h("div", { class: "panel" });
+  const hd = h("div", { class: "panel-hd" });
+  hd.appendChild(h("h3", {}, p.title));
+  if (p.unit) hd.appendChild(h("span", { class: "unit" }, p.unit));
+  box.appendChild(hd);
+
+  const c = p.chart;
+  const present = c && c.series.some(s => (S[s.key] || []).some(v => v != null));
+  if (!present) {
+    box.appendChild(h("div", { class: "empty" }, p.emptyNote || "No counter moved during this run."));
+  } else {
+    if (c.series.length > 1) box.appendChild(legendOf(c.series.map(s => ({ ...s, line: c.type === "line" }))));
+    const plot = h("div", { class: "plot" });
+    box.appendChild(plot);
+    mount(plot, { ...c, title: p.title });
+  }
+  if (p.note) box.appendChild(h("p", { class: "pnote" }, p.note));
+  return box;
+}
+
+function tableOf(t) {
+  const box = h("div", { class: "tw" });
+  let s = "<table><thead><tr>" + t.columns.map(c => `<th>${c}</th>`).join("") + "</tr></thead><tbody>";
+  for (const row of t.rows) {
+    if (row.group) { s += `<tr class="grp"><td colspan="${t.columns.length}">${row.group}</td></tr>`; continue; }
+    s += "<tr>" + row.cells.map((c, k) => {
+      const v = c == null || c === "" ? "&mdash;" : c;
+      const cls = c == null || c === "" ? "dim" : (row.wrap && k === row.wrap ? "wrap-cell" : "");
+      return `<td class="${cls}">${v}</td>`;
+    }).join("") + "</tr>";
+  }
+  box.innerHTML = s + "</tbody></table>";
+  return box;
+}
+
+function blockOf(b) {
+  if (b.kind === "panel") return panelOf(b);
+  if (b.kind === "duo") {
+    const d = h("div", { class: "duo" });
+    for (const p of b.panels) d.appendChild(panelOf(p));
+    return d;
+  }
+  if (b.kind === "table") {
+    const box = h("div", {});
+    box.style.display = "flex";
+    box.style.flexDirection = "column";
+    box.style.gap = "10px";
+    if (b.title) box.appendChild(h("h3", {}, b.title));
+    box.appendChild(tableOf(b));
+    if (b.note) box.appendChild(h("p", { class: "pnote", style: "padding:0" }, b.note));
+    return box;
+  }
+  if (b.kind === "callout") {
+    const box = h("div", { class: "callout" + (b.tone === "crit" ? " crit" : "") });
+    if (b.k) box.appendChild(h("div", { class: "k" }, b.k));
+    const p = h("p");
+    p.innerHTML = b.text;
+    box.appendChild(p);
+    return box;
+  }
+  if (b.kind === "strip") {
+    const box = h("div", { class: "panel" });
+    const hd = h("div", { class: "panel-hd" });
+    hd.appendChild(h("h3", {}, b.title));
+    if (b.unit) hd.appendChild(h("span", { class: "unit" }, b.unit));
+    box.appendChild(hd);
+    const plot = h("div", { class: "plot" });
+    box.appendChild(plot);
+    strip(plot);
+    if (b.note) box.appendChild(h("p", { class: "pnote" }, b.note));
+    return box;
+  }
+  const p = h("p");
+  p.innerHTML = b.text;
+  return p;
+}
+
+const root = document.getElementById("sections");
+for (const sec of D.sections) {
+  const s = h("section", { id: sec.id });
+  const head = h("div", { class: "shead" });
+  if (sec.eyebrow) head.appendChild(h("div", { class: "eyebrow" }, sec.eyebrow));
+  head.appendChild(h("h2", {}, sec.title));
+  if (sec.intro) { const p = h("p"); p.innerHTML = sec.intro; head.appendChild(p); }
+  s.appendChild(head);
+  for (const b of sec.blocks) s.appendChild(blockOf(b));
+  root.appendChild(s);
+}
+
+</script>
+</body>
+</html>

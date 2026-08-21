@@ -1,0 +1,21 @@
+{
+  "id": "kv_v1",
+  "schema": [
+    {
+      "name": "key",
+      "type": "STRING"
+    },
+    {
+      "name": "timestamp",
+      "type": "TIMESTAMP"
+    },
+    {
+      "name": "value",
+      "type": "STRING"
+    },
+    {
+      "name": "inserted_at",
+      "type": "TIMESTAMP"
+    }
+  ]
+}

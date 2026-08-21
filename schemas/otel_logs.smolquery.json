@@ -62,6 +62,7 @@
     {"name": "session_id", "type": "STRING"},
     {"name": "thread_name", "type": "STRING"},
     {"name": "log_file_path", "type": "STRING"},
-    {"name": "sampled", "type": "BOOL"}
+    {"name": "sampled", "type": "BOOL"},
+    {"name": "inserted_at", "type": "TIMESTAMP"}
   ]
 }
