@@ -75,6 +75,11 @@ description = "Compaction bench only: watch both storage pods for COMPACT_WATCH_
 env = { BENCHES = "compaction" }
 run = "elixir scripts/loadgen.exs sweep"
 
+[tasks.bench-onebrc]
+description = "One billion rows: generate the CSV on the box, upload it, then time the 1BRC query ten times (ONEBRC_ROWS=..., ONEBRC_WORKERS=...)"
+env = { BENCHES = "onebrc", TABLE = "onebrc_v1" }
+run = "elixir scripts/loadgen.exs sweep"
+
 [tasks.bench-all]
 description = "All three benches in order: ingest, then pruning, then compaction"
 env = { BENCHES = "ingest,pruning,compaction" }

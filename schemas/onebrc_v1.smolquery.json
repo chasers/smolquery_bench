@@ -1,0 +1,13 @@
+{
+  "id": "onebrc_v1",
+  "schema": [
+    {
+      "name": "station",
+      "type": "STRING"
+    },
+    {
+      "name": "temperature",
+      "type": "FLOAT64"
+    }
+  ]
+}

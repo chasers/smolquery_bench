@@ -81,9 +81,10 @@ defmodule Bench do
   defp default_clustering("otel_logs_v32"), do: ["project_id", "inserted_at"]
   defp default_clustering("otel_logs_v33"), do: ["project_id", "inserted_at"]
   defp default_clustering("kv_v1"), do: ["key", "inserted_at"]
+  defp default_clustering("onebrc_v1"), do: ["station"]
   defp default_clustering(_table), do: ["project_id", "timestamp"]
 
-  @bench_types ~w(ingest pruning compaction)
+  @bench_types ~w(ingest pruning compaction onebrc)
 
   @doc """
   The bench types to run, from `BENCHES`, as a comma-separated list.

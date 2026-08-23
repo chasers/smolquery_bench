@@ -11,6 +11,13 @@ rows/s sealed**, zero refusals, ordinary requests, no client batching. That is
 **An evening of partition/claim sweeping was measuring which shapes fit in
 2 GiB.** The ranking inverted once the budget rose.
 
+**One billion rows in 113 s — 8,825,572 rows/s sustained, zero refusals, zero
+restarts, sealing at parity — and the 1BRC aggregate over them in 10.7 s
+median on the distributed path (27.5 s single-engine).** Two-column rows,
+16 workers, nothing saturated. A `round()` around `avg()` refuses the
+decomposer and costs 2.6×. See
+[2026-08-22-one-billion-rows.md](2026-08-22-one-billion-rows.md).
+
 **Small rows: 3,461,443 rows/s at 32 VUs, zero refusals, seal at parity.**
 133-byte kv rows against `kv_v1`, same tuning. In wire bytes it is the same
 ~500 MiB/s ceiling the otel record hits — the cluster is byte-bound.
