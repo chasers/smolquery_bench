@@ -82,6 +82,7 @@ commas. An unknown or empty value fails before anything starts.
 mise run bench-ingest                # BENCHES=ingest
 mise run bench-pruning               # BENCHES=pruning
 mise run bench-compaction            # BENCHES=compaction
+mise run bench-onebrc                # BENCHES=onebrc, TABLE=onebrc_v1
 mise run bench-all                   # BENCHES=ingest,pruning,compaction
 BENCHES=ingest,pruning mise run bench-sweep
 ```
@@ -91,10 +92,12 @@ BENCHES=ingest,pruning mise run bench-sweep
 | `ingest` | the VU sweep: rows/s, latency, refusals, pod CPU and memory | `<label>.k6.json`, `<label>.pods.json` |
 | `pruning` | a `count` and a `scan` query against a live date, an empty date, and no filter; each case also records an `"explain": "analyze"` plan and its engine time | `<label>.prune.json` |
 | `compaction` | compaction outcomes and pod restarts over a long window | `<label>.compact.json` |
+| `onebrc` | the one billion row challenge, in spirit: generate a `station;temperature` CSV on the box, upload it as NDJSON inserts, then time the 1BRC aggregate ten times | `<label>.onebrc.json`, `<label>.upload.json` |
 
-The types always run in the order ingest, pruning, compaction, whatever order
-you type them in. Pruning reads the rows ingest writes, and compaction needs
-those rows sealed.
+The types always run in the order ingest, pruning, compaction, onebrc,
+whatever order you type them in. Pruning reads the rows ingest writes, and
+compaction needs those rows sealed. `onebrc` stands alone: it has its own
+table, its own generator and its own uploader.
 
 Every sweep also samples each pod's metrics into a SQLite database — see
 [Pod metrics sampling](#pod-metrics-sampling).
@@ -225,6 +228,18 @@ inlines them, so edit those files rather than the emitted HTML.
   (default 3), `PRUNE_SETTLE_S` (default 30), `PRUNE_COLUMN` (default
   `duration_ms`) and `PRUNE_TIMEOUT_MS` (default 180000). Compaction takes
   `COMPACT_WATCH_S` (default 900).
+- **onebrc**: `ONEBRC_ROWS` (default 1,000,000,000) sizes the CSV;
+  `ONEBRC_UPLOAD=false` skips the generate and upload steps and only times
+  the queries against the rows already in the table;
+  `ONEBRC_MAX_ROWS` (default 0 = all) caps the upload for a smoke run;
+  `ONEBRC_WORKERS` (default 8) sets concurrent requests;
+  `ONEBRC_ROWS_PER_REQUEST` (default 200,000, ~8.5 MB of NDJSON) sets the
+  batch; `ONEBRC_POLL_S` (default 30) is the progress tick;
+  `ONEBRC_DRAIN_WAIT_S` (default 1800) bounds the wait for an empty hot tier;
+  `ONEBRC_QUERY_REPEATS` (default 10) and `ONEBRC_QUERY_TIMEOUT_MS` (default
+  600000) shape the query phase. The CSV stays on the box under
+  `/opt/bench/data/` and is reused when its `.done` marker matches
+  `ONEBRC_ROWS`.
 - **Metrics sampling**: `METRICS_INTERVAL_S` (default 10) sets the tick;
   `METRICS_DB` overrides the database path.
 - **Body dates**: `BASE_DATE=YYYY-MM-DD` backdates the `timestamp` column.
@@ -404,8 +419,40 @@ it cannot see per-row rejections — and clears the box's results directory, so
 is byte-identical without shipping 6.87 MiB. Pod sampling stays on this machine,
 because it needs the kubeconfig.
 
-Knobs: `LOADGEN_INSTANCE_TYPE` (default `c7i.2xlarge`), `LOADGEN_SUBNET`,
-`VUS_LIST`, `DURATION_S`, `WARMUP_S`, `PAUSE_S`, `RESULTS`.
+Knobs: `LOADGEN_INSTANCE_TYPE` (default `c7i.2xlarge`), `LOADGEN_ROOT_GIB`
+(default 64, a gp3 root at 500 MiB/s — the 1BRC CSV alone is 13.8 GB),
+`LOADGEN_SUBNET`, `VUS_LIST`, `DURATION_S`, `WARMUP_S`, `PAUSE_S`, `RESULTS`.
+
+### The one billion row challenge
+
+`mise run bench-onebrc` answers two questions about the deployed cluster: how
+fast it takes a billion rows, and how fast it answers the
+[1BRC](https://github.com/gunnarmorling/1brc) query over them. It follows the
+challenge in spirit — 413 stations with the original means, Gaussian
+temperatures to one decimal, the same query — not its rules.
+
+1. `tools/gen1brc` writes `measurements.<rows>.txt` on the box:
+   `station;temperature` lines, seeded, generated in parallel and written in
+   order, so a rerun reads the same bytes. It stays on disk as the source.
+2. `tools/upload1brc` streams the CSV as NDJSON `POST …/insert` requests,
+   `ONEBRC_WORKERS` at a time, round-robin across the api pods. Every batch
+   carries an `insertId`, so a retry after a 429, a 5xx, a timeout or a
+   dropped connection cannot double-count rows. It runs under `nohup`,
+   because SSM caps one command at an hour; the sweep polls its progress
+   JSON and prints rows/s as it goes. The summary lands in
+   `<label>.upload.json`.
+3. The sweep waits for the hot tier to drain, then runs the 1BRC aggregate
+   — `min`, `avg`, `max` per station, ordered by station, **without** a
+   `round()` on the mean: a function wrapping an aggregate refuses the
+   distributed decomposer (`decomposer.ex`, `unsupported_aggregate_shape`),
+   so rounding belongs to presentation, as in the challenge —
+   `ONEBRC_QUERY_REPEATS` times with default options, again with
+   `"distributed": false`, and `count(*)` as the floor. Every wall time lands
+   in `<label>.onebrc.json`, with one `"explain": "analyze"` per case.
+
+`rows_accepted` in the upload summary comes from the server's
+`insertedRows`, not from the client's count. `count(*)` after the drain
+should match it exactly; a gap is a finding.
 
 The instance is not Terraform-managed. It is found by tag
 `Name=smolquery-bench-loadgen`, and `mise run bench-down` terminates it.
@@ -414,6 +461,8 @@ The instance is not Terraform-managed. It is found by tag
 
 ```
 tools/genbody/        deterministic 63-column OTel NDJSON generator
+tools/gen1brc/        the 1BRC measurements file generator, 413 stations, seeded
+tools/upload1brc/     streams a measurements file as idempotent NDJSON inserts
 tools/watch/          CPU and RSS sampler, ps-based, for the server and k6
 k6/insert.js          load script, closed loop (VUS) or open loop (RATE)
 schemas/              smolquery table-create JSON, ClickHouse MergeTree DDL
@@ -496,6 +545,7 @@ Adding the column changed the schema, and smolquery answers 409 on a
 | `otel_logs_v20`–`v32` | same as v3 | clustering `[project_id, inserted_at]` | one fresh table per run: the 2026-08-20 partition sweep, then the 2026-08-21 memory sweep |
 | `otel_logs_v33` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-21 96-VU parity run — the current record, and the current table |
 | `kv_v1` | `PARTITION BY toDate(inserted_at)`, `ORDER BY (key, inserted_at)` | clustering `[key, inserted_at]` | 4 columns (`key`, `timestamp`, `value`, `inserted_at`), ~133 B/row — the small-row bench, `SHAPE=kv` |
+| `onebrc_v1` | `ORDER BY (station)` | clustering `[station]` | 2 columns (`station` STRING, `temperature` FLOAT64), no `inserted_at`, ~42 B/row as NDJSON — the one billion row challenge, `BENCHES=onebrc` |
 
 `otel_logs_v3` is what `TABLE` defaults to. It exists to answer one question:
 does a query for a single date read only that date's files?
@@ -511,6 +561,13 @@ like-for-like. Say which mechanism produced each number.
 collects NULLs in a partition of their own.
 
 ## Reference numbers
+
+The one billion row challenge, 2026-08-22: **1,000,000,000 two-column rows in
+113.3 s (8,825,572 rows/s, 352 MiB/s)** at 16 workers with zero refusals and
+zero restarts, `count(*)` exact; the 1BRC aggregate over them in **10.7 s
+median** distributed across the three storage pods, 27.5 s single-engine,
+`count(*)` 2.0 s. Neither upload run saturated the cluster. See
+[results/2026-08-22-one-billion-rows.md](results/2026-08-22-one-billion-rows.md).
 
 load-rig, on an M1 Pro with 10 cores and 16 GB: smolquery peaked at **383,157
 rows/s** (32 VU, pool=4, enc=4), ClickHouse at **165,814 rows/s** with matching
