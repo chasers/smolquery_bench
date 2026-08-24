@@ -4,7 +4,10 @@
 // by one of -workers goroutines, round-robin across -urls. Every batch carries
 // an insertId, so a retry after a 429, a 5xx, a timeout or a dropped
 // connection cannot double-count rows. The authorization header value comes
-// from the AUTH environment variable, never from the command line.
+// from the AUTH environment variable, never from the command line. Past
+// -deadline the reader cuts no more batches and a failing batch is not
+// retried, so a collapsed cluster costs a bounded amount of time; the summary
+// then carries stopped_early: true.
 package main
 
 import (
@@ -24,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -52,6 +56,20 @@ type stats struct {
 	statuses     map[int]int64
 	firstSentAt  atomic.Int64
 	lastDoneAt   atomic.Int64
+	stoppedEarly atomic.Bool
+}
+
+func pastDeadline(deadline time.Time) bool {
+	return !deadline.IsZero() && time.Now().After(deadline)
+}
+
+func clientCPUSeconds() float64 {
+	var usage syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+		return 0
+	}
+	return float64(usage.Utime.Sec) + float64(usage.Utime.Usec)/1e6 +
+		float64(usage.Stime.Sec) + float64(usage.Stime.Usec)/1e6
 }
 
 func (s *stats) recordStatus(code int) {
@@ -105,7 +123,7 @@ func convert(raw []byte) ([]byte, int64) {
 	return out, rows
 }
 
-func readBatches(path string, targetBytes int, maxRows int64, jobs chan<- batch, st *stats) {
+func readBatches(path string, targetBytes int, maxRows int64, deadline time.Time, jobs chan<- batch, st *stats) {
 	defer close(jobs)
 	f, err := os.Open(path)
 	if err != nil {
@@ -116,6 +134,10 @@ func readBatches(path string, targetBytes int, maxRows int64, jobs chan<- batch,
 	index := 0
 	for {
 		if maxRows > 0 && st.rowsRead.Load() >= maxRows {
+			return
+		}
+		if pastDeadline(deadline) {
+			st.stoppedEarly.Store(true)
 			return
 		}
 		buf := make([]byte, 0, targetBytes+256)
@@ -184,13 +206,14 @@ func post(client *http.Client, url string, body []byte, auth string) (int, inser
 	return res.StatusCode, parsed, elapsed, nil
 }
 
-func work(client *http.Client, urls []string, auth, prefix string, jobs <-chan batch, st *stats) {
+func work(client *http.Client, urls []string, auth, prefix string, deadline time.Time, jobs <-chan batch, st *stats) {
 	for b := range jobs {
 		body, rows := convert(b.raw)
 		url := fmt.Sprintf("%s?insertId=%s-%d", urls[b.index%len(urls)], prefix, b.index)
 		backoff := time.Second
 		done := false
-		for attempt := 1; attempt <= maxAttempts && !done; attempt++ {
+		gaveUp := false
+		for attempt := 1; attempt <= maxAttempts && !done && !gaveUp; attempt++ {
 			st.firstSentAt.CompareAndSwap(0, time.Now().UnixNano())
 			status, parsed, value, err := post(client, url, body, auth)
 			st.requests.Add(1)
@@ -206,6 +229,11 @@ func work(client *http.Client, urls []string, auth, prefix string, jobs <-chan b
 			case err == nil && status == http.StatusTooManyRequests:
 				st.recordStatus(status)
 				st.retries429.Add(1)
+				if pastDeadline(deadline) {
+					st.stoppedEarly.Store(true)
+					gaveUp = true
+					continue
+				}
 				time.Sleep(time.Duration(value * float64(time.Second)))
 			default:
 				if err == nil {
@@ -217,12 +245,17 @@ func work(client *http.Client, urls []string, auth, prefix string, jobs <-chan b
 				if attempt == 1 || attempt%5 == 0 {
 					log.Printf("batch %d attempt %d: status %d err %v", b.index, attempt, status, err)
 				}
+				if pastDeadline(deadline) {
+					st.stoppedEarly.Store(true)
+					gaveUp = true
+					continue
+				}
 				time.Sleep(backoff)
 				backoff = min(backoff*2, 8*time.Second)
 			}
 		}
 		if !done {
-			log.Printf("batch %d failed after %d attempts, %d rows lost", b.index, maxAttempts, rows)
+			log.Printf("batch %d gave up after %d attempts, %d rows lost", b.index, maxAttempts, rows)
 			st.rowsFailed.Add(rows)
 		}
 	}
@@ -257,6 +290,7 @@ func snapshot(st *stats, start time.Time, recent []sample, final bool, cfg map[s
 		elapsed = time.Unix(0, st.lastDoneAt.Load()).Sub(start).Seconds()
 	}
 	accepted := st.rowsAccepted.Load()
+	cpu := clientCPUSeconds()
 	out := map[string]any{
 		"rows_read":        st.rowsRead.Load(),
 		"rows_accepted":    accepted,
@@ -271,6 +305,9 @@ func snapshot(st *stats, start time.Time, recent []sample, final bool, cfg map[s
 		"data_sent_mib":    float64(st.bytesSent.Load()) / 1048576,
 		"mib_per_s":        float64(st.bytesSent.Load()) / 1048576 / max(elapsed, 1e-9),
 		"rows_per_request": float64(accepted) / float64(max(len(latencies), 1)),
+		"stopped_early":    st.stoppedEarly.Load(),
+		"client_cpu_s":     cpu,
+		"client_cores":     cpu / max(elapsed, 1e-9),
 	}
 	for k, v := range cfg {
 		out[k] = v
@@ -323,6 +360,7 @@ func main() {
 	progress := flag.String("progress", "", "progress JSON path, rewritten every 5s")
 	out := flag.String("out", "", "summary JSON path")
 	prefix := flag.String("insert-prefix", "", "insertId prefix (default: onebrc-<unix seconds>)")
+	deadline := flag.Duration("deadline", 0, "stop cutting batches and stop retrying after this long (0 = never)")
 	flag.Parse()
 
 	urls := strings.Split(*urlList, ",")
@@ -362,18 +400,23 @@ func main() {
 		"workers":                 *workers,
 		"rows_per_request_target": *rows,
 		"insert_prefix":           *prefix,
+		"deadline_s":              deadline.Seconds(),
 	}
 
 	jobs := make(chan batch, *workers*2)
 	start := time.Now()
-	go readBatches(*file, *rows*bytesPerRow, *maxRows, jobs, st)
+	var deadlineAt time.Time
+	if *deadline > 0 {
+		deadlineAt = start.Add(*deadline)
+	}
+	go readBatches(*file, *rows*bytesPerRow, *maxRows, deadlineAt, jobs, st)
 
 	var wg sync.WaitGroup
 	for i := 0; i < *workers; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			work(client, urls, auth, *prefix, jobs, st)
+			work(client, urls, auth, *prefix, deadlineAt, jobs, st)
 		}()
 	}
 	finished := make(chan struct{})

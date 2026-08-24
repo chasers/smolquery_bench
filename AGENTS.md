@@ -180,6 +180,12 @@ large enough for whatever a claim contains.
   `smolquery_buffer_wire_microseconds_total` had accumulated 876 **micro**seconds
   after 3,992 inserts. The wire counter is not carrying the transport. Do not
   read the write phase as buffer work.
+- **A 429 from the insert route also kills the keep-alive connection.** The
+  client's next request on it fails with `connection reset by peer`, so an
+  uploader sees one status-0 failure per 429 and re-sends the whole body.
+  Count status 0 separately from 429, and do not read the resets as a
+  network problem. Cause: `insert_controller.ex:82` answers on the conn
+  from before the body read (2026-08-24 write-up).
 - A job's top-level `statistics.rowsScanned` counts **sealed rows only**.
   It grows on its own while a hot tier drains, which looks like row
   duplication and is not. Read `hot` and `sealed` separately, and get a

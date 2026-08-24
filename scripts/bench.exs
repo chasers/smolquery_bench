@@ -81,7 +81,7 @@ defmodule Bench do
   defp default_clustering("otel_logs_v32"), do: ["project_id", "inserted_at"]
   defp default_clustering("otel_logs_v33"), do: ["project_id", "inserted_at"]
   defp default_clustering("kv_v1"), do: ["key", "inserted_at"]
-  defp default_clustering("onebrc_v1"), do: ["station"]
+  defp default_clustering("onebrc" <> _), do: ["station"]
   defp default_clustering(_table), do: ["project_id", "timestamp"]
 
   @bench_types ~w(ingest pruning compaction onebrc)
@@ -123,16 +123,20 @@ defmodule Bench do
   def bench?(type), do: type in benches()
 
   @doc """
-  The schema or DDL file for a table, per arm. A table without its own file
-  falls back to the original `otel_logs` definition, which v1 and v2 share.
+  The schema or DDL file for a table, per arm. An `onebrc*` table without its
+  own file uses the `onebrc_v1` definition, so a worker sweep can give every
+  point a fresh table. Any other table without its own file falls back to the
+  original `otel_logs` definition, which v1 and v2 share.
   """
   def schema_path(arm, table \\ table()) do
     extension = if arm == "clickhouse", do: "clickhouse.sql", else: "smolquery.json"
     specific = Path.join(root(), "schemas/#{table}.#{extension}")
 
-    if File.exists?(specific),
-      do: specific,
-      else: Path.join(root(), "schemas/otel_logs.#{extension}")
+    cond do
+      File.exists?(specific) -> specific
+      String.starts_with?(table, "onebrc") -> Path.join(root(), "schemas/onebrc_v1.#{extension}")
+      true -> Path.join(root(), "schemas/otel_logs.#{extension}")
+    end
   end
 
   def fatal!(message) do
@@ -519,21 +523,23 @@ defmodule Bench.Remote do
     end
   end
 
-  def schema_file do
-    Bench.env("SCHEMA_FILE", Bench.schema_path("smolquery"))
+  def schema_file(table \\ table()) do
+    Bench.env("SCHEMA_FILE", Bench.schema_path("smolquery", table))
   end
 
-  def insert_url, do: "#{base_url()}/v1/datasets/#{dataset()}/tables/#{table()}/insert"
+  def insert_url(table \\ table()) do
+    "#{base_url()}/v1/datasets/#{dataset()}/tables/#{table}/insert"
+  end
 
-  def setup do
+  def setup(table \\ table()) do
     key = api_key()
     headers = [{"authorization", "Bearer #{key}"}]
 
     schema =
-      schema_file()
+      schema_file(table)
       |> File.read!()
       |> JSON.decode!()
-      |> Map.put("id", table())
+      |> Map.put("id", table)
       |> JSON.encode!()
 
     wait_healthy(30)
@@ -543,13 +549,13 @@ defmodule Bench.Remote do
 
     ensure(
       :patch,
-      "/v1/datasets/#{dataset()}/tables/#{table()}",
+      "/v1/datasets/#{dataset()}/tables/#{table}",
       headers,
-      ~s({"clustering":#{Bench.clustering()}}),
+      ~s({"clustering":#{Bench.clustering(table)}}),
       "set clustering"
     )
 
-    IO.puts("remote ready: #{insert_url()}")
+    IO.puts("remote ready: #{insert_url(table)}")
   end
 
   defp wait_healthy(0) do

@@ -80,6 +80,11 @@ description = "One billion rows: generate the CSV on the box, upload it, then ti
 env = { BENCHES = "onebrc", TABLE = "onebrc_v1" }
 run = "elixir scripts/loadgen.exs sweep"
 
+[tasks.bench-onebrc-ingest]
+description = "One billion rows, ingest only: one full upload per worker count into a fresh table each, no query phase (ONEBRC_WORKERS=\"16 32 48 64 96 128\", TABLE=onebrc_v3)"
+env = { BENCHES = "onebrc", TABLE = "onebrc_v3", ONEBRC_QUERIES = "false", ONEBRC_WORKERS = "16 32 48 64 96 128", ONEBRC_UPLOAD_DEADLINE_S = "600" }
+run = "elixir scripts/loadgen.exs sweep"
+
 [tasks.bench-all]
 description = "All three benches in order: ingest, then pruning, then compaction"
 env = { BENCHES = "ingest,pruning,compaction" }

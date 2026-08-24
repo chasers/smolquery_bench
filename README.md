@@ -83,6 +83,7 @@ mise run bench-ingest                # BENCHES=ingest
 mise run bench-pruning               # BENCHES=pruning
 mise run bench-compaction            # BENCHES=compaction
 mise run bench-onebrc                # BENCHES=onebrc, TABLE=onebrc_v1
+mise run bench-onebrc-ingest         # BENCHES=onebrc, ingest only, one upload per worker count
 mise run bench-all                   # BENCHES=ingest,pruning,compaction
 BENCHES=ingest,pruning mise run bench-sweep
 ```
@@ -232,7 +233,14 @@ inlines them, so edit those files rather than the emitted HTML.
   `ONEBRC_UPLOAD=false` skips the generate and upload steps and only times
   the queries against the rows already in the table;
   `ONEBRC_MAX_ROWS` (default 0 = all) caps the upload for a smoke run;
-  `ONEBRC_WORKERS` (default 8) sets concurrent requests;
+  `ONEBRC_WORKERS` (default 8) sets concurrent requests — a list
+  (`"16 32 64"`) runs one full upload per value, each into a fresh
+  `<TABLE>_w<N>` table, and stops after a point that lost rows or hit the
+  deadline; `ONEBRC_QUERIES=false` skips the query cases and the sample
+  rows, so a point is upload, drain and `count(*)` only;
+  `ONEBRC_UPLOAD_DEADLINE_S` (default 0 = none) bounds one upload: past it
+  the uploader cuts no more batches and stops retrying, and the summary
+  carries `stopped_early`;
   `ONEBRC_ROWS_PER_REQUEST` (default 200,000, ~8.5 MB of NDJSON) sets the
   batch; `ONEBRC_POLL_S` (default 30) is the progress tick;
   `ONEBRC_DRAIN_WAIT_S` (default 1800) bounds the wait for an empty hot tier;
@@ -452,7 +460,19 @@ temperatures to one decimal, the same query — not its rules.
 
 `rows_accepted` in the upload summary comes from the server's
 `insertedRows`, not from the client's count. `count(*)` after the drain
-should match it exactly; a gap is a finding.
+should match it exactly; a gap is a finding. The summary also carries
+`client_cpu_s` and `client_cores`, the uploader's own CPU from `getrusage`:
+a point whose `client_cores` nears the box's vCPU count measured the box,
+not the cluster.
+
+`mise run bench-onebrc-ingest` answers a third question: **at what
+concurrency does the upload stop scaling?** It runs the same upload once per
+value in `ONEBRC_WORKERS`, each into its own `<TABLE>_w<N>` table, with no
+query phase. Every point still waits for the hot tier to drain and checks
+`count(*)` against `rows_accepted`. A 600 s deadline bounds a collapsed
+point, and the sweep stops after a point that lost rows or hit the
+deadline. Read rows/s, then 429s and other retries, then p99 against p50,
+then 5xx, `rows_failed` and pod restarts, in that order.
 
 The instance is not Terraform-managed. It is found by tag
 `Name=smolquery-bench-loadgen`, and `mise run bench-down` terminates it.
@@ -546,6 +566,8 @@ Adding the column changed the schema, and smolquery answers 409 on a
 | `otel_logs_v33` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-21 96-VU parity run — the current record, and the current table |
 | `kv_v1` | `PARTITION BY toDate(inserted_at)`, `ORDER BY (key, inserted_at)` | clustering `[key, inserted_at]` | 4 columns (`key`, `timestamp`, `value`, `inserted_at`), ~133 B/row — the small-row bench, `SHAPE=kv` |
 | `onebrc_v1` | `ORDER BY (station)` | clustering `[station]` | 2 columns (`station` STRING, `temperature` FLOAT64), no `inserted_at`, ~42 B/row as NDJSON — the one billion row challenge, `BENCHES=onebrc` |
+| `onebrc_v2` | same | same | the 2026-08-22 16-worker upload |
+| `onebrc_v3_w<N>` | same | same | one table per point of the 2026-08-24 worker sweep, `mise run bench-onebrc-ingest`; any `onebrc*` table takes the `onebrc_v1` schema and clustering |
 
 `otel_logs_v3` is what `TABLE` defaults to. It exists to answer one question:
 does a query for a single date read only that date's files?

@@ -886,7 +886,16 @@ defmodule Bench.Loadgen do
   defp onebrc_rows, do: Bench.env_int("ONEBRC_ROWS", 1_000_000_000)
   defp onebrc_upload?, do: Bench.env("ONEBRC_UPLOAD", "true") == "true"
   defp onebrc_max_rows, do: Bench.env_int("ONEBRC_MAX_ROWS", 0)
-  defp onebrc_workers, do: Bench.env_int("ONEBRC_WORKERS", 8)
+  defp onebrc_queries?, do: Bench.env("ONEBRC_QUERIES", "true") == "true"
+  defp onebrc_upload_deadline_s, do: Bench.env_int("ONEBRC_UPLOAD_DEADLINE_S", 0)
+
+  defp onebrc_workers_list do
+    "ONEBRC_WORKERS"
+    |> Bench.env("8")
+    |> String.split([" ", ","], trim: true)
+    |> Enum.map(&String.to_integer/1)
+  end
+
   defp onebrc_rows_per_request, do: Bench.env_int("ONEBRC_ROWS_PER_REQUEST", 200_000)
   defp onebrc_poll_s, do: Bench.env_int("ONEBRC_POLL_S", 30)
   defp onebrc_query_repeats, do: Bench.env_int("ONEBRC_QUERY_REPEATS", 10)
@@ -895,14 +904,7 @@ defmodule Bench.Loadgen do
   defp onebrc_csv, do: "#{remote_dir()}/data/measurements.#{onebrc_rows()}.txt"
 
   defp run_onebrc(id, dataset, table, key, watcher) do
-    label = "loadgen-onebrc#{label_suffix()}"
-    ref = "#{dataset}.#{table}"
-    url = "#{Bench.Remote.base_url()}/v1/queries"
-
-    IO.puts("\n== onebrc: table #{ref}")
-    Bench.Remote.setup()
-
-    IO.puts("== onebrc: pushing the working tree, building gen1brc and upload1brc")
+    IO.puts("\n== onebrc: pushing the working tree, building gen1brc and upload1brc")
     push_code(id)
 
     run!(id, """
@@ -914,69 +916,133 @@ defmodule Bench.Loadgen do
     mkdir -p data logs results
     """)
 
-    {csv, upload} =
-      if onebrc_upload?() do
-        Bench.WatchMetrics.set_phase(watcher, "onebrc-generate")
-        csv = onebrc_ensure_csv(id)
-        IO.puts("== onebrc: #{csv}")
+    if onebrc_upload?() do
+      Bench.WatchMetrics.set_phase(watcher, "onebrc-generate")
+      IO.puts("== onebrc: #{onebrc_ensure_csv(id)}")
+    end
 
-        Bench.WatchMetrics.set_phase(watcher, "onebrc-upload")
-        upload = onebrc_upload(id, dataset, table, key, label)
+    points = onebrc_points(table)
 
+    Enum.reduce_while(points, :ok, fn {workers, point_table, tag}, :ok ->
+      upload = run_onebrc_point(id, dataset, point_table, key, watcher, workers, tag)
+
+      if onebrc_point_failed?(upload) and length(points) > 1 do
         IO.puts(
-          "== onebrc: #{upload["rows_accepted"]} rows in " <>
-            "#{Float.round(upload["duration_s"] / 1, 1)}s = #{round(upload["rows_per_s"])} rows/s, " <>
-            "#{Float.round(upload["mib_per_s"] / 1, 1)} MiB/s, #{upload["requests"]} requests, " <>
-            "#{upload["retries_429"]} x 429, #{upload["rows_rejected"]} rejected, " <>
-            "#{upload["rows_failed"]} failed"
+          "== onebrc: stopping the sweep after #{workers} workers: " <>
+            "#{upload["rows_failed"]} rows failed, stopped early #{upload["stopped_early"]}"
         )
 
-        {csv, upload}
+        {:halt, :stopped}
       else
-        IO.puts("== onebrc: ONEBRC_UPLOAD=false, timing queries against the rows already there")
-        {nil, nil}
+        {:cont, :ok}
       end
-
-    Bench.WatchMetrics.set_phase(watcher, "onebrc-drain")
-    drain_sql = "SELECT count(*) AS n FROM #{ref} WHERE station = '~'"
-    drain = await_hot_drain_with(url, key, drain_sql, onebrc_drain_wait_s())
-    IO.puts("== onebrc: hot tier #{drain_outcome(drain)}")
-
-    Bench.WatchMetrics.set_phase(watcher, "onebrc-query")
-    sql = String.replace(@onebrc_query, "%{ref}", ref)
-    options = %{"timeoutMs" => onebrc_query_timeout_ms()}
-
-    cases = [
-      {"aggregate", sql, options},
-      {"aggregate-single-engine", sql, Map.put(options, "distributed", false)},
-      {"count", "SELECT count(*) AS n FROM #{ref}", options}
-    ]
-
-    queries =
-      Enum.map(cases, fn {name, case_sql, case_options} ->
-        onebrc_query_case(url, key, name, case_sql, case_options)
-      end)
-
-    payload = %{
-      "inserted_at" => now_iso(),
-      "table" => ref,
-      "rows_target" => onebrc_rows(),
-      "csv" => csv,
-      "upload" => upload,
-      "drain_wait_s" => drain.waited_s,
-      "drain_hot_files_left" => drain.hot_files,
-      "count" => onebrc_count(url, key, ref),
-      "sample_rows" => onebrc_sample_rows(url, key, sql, options),
-      "queries" => queries
-    }
-
-    File.write!(Path.join(results_dir(), "#{label}.onebrc.json"), JSON.encode!(payload) <> "\n")
-    IO.puts("== onebrc → #{label}.onebrc.json")
+    end)
 
     if onebrc_upload?() do
       delete_api_key()
       fetch()
     end
+  end
+
+  defp onebrc_points(table) do
+    case onebrc_workers_list() do
+      [workers] -> [{workers, table, ""}]
+      list -> Enum.map(list, &{&1, "#{table}_w#{&1}", "-w#{&1}"})
+    end
+  end
+
+  defp onebrc_point_failed?(nil), do: false
+
+  defp onebrc_point_failed?(upload) do
+    upload["rows_failed"] > 0 or upload["stopped_early"] == true
+  end
+
+  defp run_onebrc_point(id, dataset, table, key, watcher, workers, tag) do
+    label = "loadgen-onebrc#{label_suffix()}#{tag}"
+    ref = "#{dataset}.#{table}"
+    url = "#{Bench.Remote.base_url()}/v1/queries"
+
+    IO.puts("\n== onebrc: table #{ref}, #{workers} workers")
+    Bench.Remote.setup(table)
+
+    upload =
+      if onebrc_upload?() do
+        Bench.WatchMetrics.set_phase(watcher, "onebrc-upload#{tag}")
+        upload = onebrc_upload(id, dataset, table, key, label, workers)
+
+        IO.puts(
+          "== onebrc: #{upload["rows_accepted"]} rows in " <>
+            "#{Float.round(upload["duration_s"] / 1, 1)}s = #{round(upload["rows_per_s"])} rows/s, " <>
+            "#{Float.round(upload["mib_per_s"] / 1, 1)} MiB/s, #{upload["requests"]} requests, " <>
+            "#{upload["retries_429"]} x 429, #{upload["retries_other"]} other retries, " <>
+            "#{upload["rows_rejected"]} rejected, #{upload["rows_failed"]} failed, " <>
+            "client #{Float.round((upload["client_cores"] || 0) / 1, 2)} cores" <>
+            if(upload["stopped_early"], do: ", STOPPED EARLY at the deadline", else: "")
+        )
+
+        upload
+      else
+        IO.puts("== onebrc: ONEBRC_UPLOAD=false, timing queries against the rows already there")
+        nil
+      end
+
+    Bench.WatchMetrics.set_phase(watcher, "onebrc-drain#{tag}")
+    drain_sql = "SELECT count(*) AS n FROM #{ref} WHERE station = '~'"
+    drain = await_hot_drain_with(url, key, drain_sql, onebrc_drain_wait_s())
+    IO.puts("== onebrc: hot tier #{drain_outcome(drain)}")
+
+    sql = String.replace(@onebrc_query, "%{ref}", ref)
+    options = %{"timeoutMs" => onebrc_query_timeout_ms()}
+
+    {queries, sample_rows} =
+      if onebrc_queries?() do
+        Bench.WatchMetrics.set_phase(watcher, "onebrc-query#{tag}")
+
+        cases = [
+          {"aggregate", sql, options},
+          {"aggregate-single-engine", sql, Map.put(options, "distributed", false)},
+          {"count", "SELECT count(*) AS n FROM #{ref}", options}
+        ]
+
+        queries =
+          Enum.map(cases, fn {name, case_sql, case_options} ->
+            onebrc_query_case(url, key, name, case_sql, case_options)
+          end)
+
+        {queries, onebrc_sample_rows(url, key, sql, options)}
+      else
+        IO.puts("== onebrc: ONEBRC_QUERIES=false, skipping the query cases")
+        {[], nil}
+      end
+
+    count = onebrc_count(url, key, ref)
+    IO.puts("== onebrc: count(*) #{count}#{onebrc_count_verdict(count, upload)}")
+
+    payload = %{
+      "inserted_at" => now_iso(),
+      "table" => ref,
+      "workers" => workers,
+      "rows_target" => onebrc_rows(),
+      "csv" => if(onebrc_upload?(), do: onebrc_csv(), else: nil),
+      "upload" => upload,
+      "drain_wait_s" => drain.waited_s,
+      "drain_hot_files_left" => drain.hot_files,
+      "count" => count,
+      "sample_rows" => sample_rows,
+      "queries" => queries
+    }
+
+    File.write!(Path.join(results_dir(), "#{label}.onebrc.json"), JSON.encode!(payload) <> "\n")
+    IO.puts("== onebrc → #{label}.onebrc.json")
+    upload
+  end
+
+  defp onebrc_count_verdict(_count, nil), do: ""
+
+  defp onebrc_count_verdict(count, upload) do
+    if count == upload["rows_accepted"],
+      do: " = rows_accepted",
+      else: " ≠ rows_accepted #{upload["rows_accepted"]}"
   end
 
   defp onebrc_ensure_csv(id) do
@@ -997,7 +1063,7 @@ defmodule Bench.Loadgen do
     |> String.trim()
   end
 
-  defp onebrc_upload(id, dataset, table, key, label) do
+  defp onebrc_upload(id, dataset, table, key, label, workers) do
     urls =
       Enum.map_join(api_pod_ips(), ",", fn ip ->
         "http://#{ip}:4000/v1/datasets/#{dataset}/tables/#{table}/insert"
@@ -1010,9 +1076,14 @@ defmodule Bench.Loadgen do
     log = "logs/#{label}.upload.log"
     max_rows = if onebrc_max_rows() > 0, do: " -max-rows #{onebrc_max_rows()}", else: ""
 
+    deadline =
+      if onebrc_upload_deadline_s() > 0,
+        do: " -deadline #{onebrc_upload_deadline_s()}s",
+        else: ""
+
     IO.puts(
-      "== onebrc: uploading across #{targets} api pod(s), #{onebrc_workers()} workers, " <>
-        "~#{onebrc_rows_per_request()} rows/request#{max_rows}"
+      "== onebrc: uploading across #{targets} api pod(s), #{workers} workers, " <>
+        "~#{onebrc_rows_per_request()} rows/request#{max_rows}#{deadline}"
     )
 
     put_api_key(key)
@@ -1025,7 +1096,7 @@ defmodule Bench.Loadgen do
       export AUTH
       rm -f #{progress} #{summary}
       setsid nohup ./upload1brc -file #{onebrc_csv()} -urls '#{urls}' \\
-        -rows #{onebrc_rows_per_request()} -workers #{onebrc_workers()}#{max_rows} \\
+        -rows #{onebrc_rows_per_request()} -workers #{workers}#{max_rows}#{deadline} \\
         -progress #{progress} -out #{summary} -insert-prefix #{label}-#{stamp} \\
         > #{log} 2>&1 < /dev/null &
       echo $!
