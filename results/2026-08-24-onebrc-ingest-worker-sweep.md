@@ -144,6 +144,25 @@ by 935M–974M inside each ~100 s upload window against 908M–1,000M committed,
 and the hot tier emptied 27–65 s after the last insert. 4,800 segments sealed
 per point in 75 attempts. Zero counter resets on any pod across the sweep.
 
+## The repeat: one run at 48 workers
+
+The "as fast as possible with few errors" pick, on a fresh box and a fresh
+`bench.onebrc_v4`, 17:56Z: **1,000,000,000 rows in 100.7 s = 9,927,304
+rows/s**, 431 MiB/s sent, 5,371 requests, 222 × 429, 221 resets, zero rows
+lost, `count(*)` exact, hot tier empty 63 s after the last insert. p50 795
+ms, p95 1,415, p99 1,663, max 2,349. Client 0.92 cores. Zero pod restarts.
+
+That is the sweep's 48-worker point within 0.05% (9,931,741) with the same
+refusal count to within 7%, so the curve repeats. Pods: api 1.07–1.46
+cores / 1,018–1,183 MB, buffer 1.94–2.03 cores / 2,138–2,239 MB, storage
+1.42–1.45 cores / 4,486–4,736 MB. Buffer memory was 2.2 GB here against
+3.7 GB at the same point in the sweep — the sweep's earlier points had
+left page cache behind. Refusals by pod: buffer-2 28M rows, buffer-0
+9.9M, buffer-1 6.9M — uneven again, a different pod on top.
+
+Report: [loadgen-20260824T175613Z-w48-1b.html](loadgen-20260824T175613Z-w48-1b.html)
+— `results/raw-loadgen/loadgen-onebrc-w48-1b.{upload,onebrc}.json`.
+
 ## Caveats
 
 - One run per point, on fresh tables, in one 19-minute session. The points
