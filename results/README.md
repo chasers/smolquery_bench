@@ -18,6 +18,14 @@ median on the distributed path (27.5 s single-engine).** Two-column rows,
 decomposer and costs 2.6×. See
 [2026-08-22-one-billion-rows.md](2026-08-22-one-billion-rows.md).
 
+**The billion-row upload peaks at 64 workers: 10,008,571 rows/s, 1B rows in
+99.9 s.** The curve bends at 32 (first 429s, p50 doubles), is flat to 64,
+and falls at 96 and 128 as the buffer's overload meter sheds. Every point
+exact, zero restarts. **Every 429 also costs the client a wasted 8.9 MB
+upload**: `insert_controller.ex:82` answers on a conn from before the body
+read, so Bandit tears the keep-alive connection down. See
+[2026-08-24-onebrc-ingest-worker-sweep.md](2026-08-24-onebrc-ingest-worker-sweep.md).
+
 **Small rows: 3,461,443 rows/s at 32 VUs, zero refusals, seal at parity.**
 133-byte kv rows against `kv_v1`, same tuning. In wire bytes it is the same
 ~500 MiB/s ceiling the otel record hits — the cluster is byte-bound.
