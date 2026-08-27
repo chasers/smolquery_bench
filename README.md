@@ -749,7 +749,11 @@ baseline on the api pods with the wide query was 1.59 s / 2.97 s for one
 project and 3.2 s / 5.1–5.4 s for four. `distributed` is a no-op
 (`ORDER BY … LIMIT` never scatters). What remains under ingest is the
 hot-tier fetch, ~300 segment requests per query (T-400); what remains at
-four queriers is the per-job path itself, 1.16 s on an empty window
+four queriers is the per-job path itself, 1.16 s on an empty window.
+With T-400's Top-N bound (`main@caaf43c`): p95 under ingest down 14–26%,
+p99 down 20–28%, p50 up 0.1–0.5 s, the buffer pods' bill per query down
+2.4–4× — the probe's second round opens the whole hot tier at the default
+`SMOLQUERY_TOP_N_PROBE_ROWS` of 1,000,000
 ([results/2026-08-27-tail-under-ingest.md](results/2026-08-27-tail-under-ingest.md)).
 
 The pathological table, 2026-08-27: `partitions: 64` and 30 days of
