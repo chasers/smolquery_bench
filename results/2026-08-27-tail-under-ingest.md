@@ -348,3 +348,52 @@ short-lived bound cache per (table, predicate) so a tenant tailing its log
 pays the probe once, not per poll. The bound is off entirely at
 `SMOLQUERY_TOP_N_PROBE_ROWS=0`; on the median alone that is the better
 setting today, on the tail it is not.
+
+## Addendum 4, 23:0x–23:2xZ: a longer flush window (`SMOLQUERY_FLUSH_IDLE_INTERVAL_MS` 300 → 1000)
+
+The idea was bigger micro-segments: fewer files for a tail query to open.
+The buffer's own counters said what a group commit was before the change —
+under 32-VU ingest, **209 commits for 5.9M rows, ~28,000 rows (~9 bodies)
+each, 179 closed by the 300 ms idle timer and 28 by the 94 MB cap**
+(`smolquery_buffer_commit_rows_bucket`, `smolquery_buffer_flush_trigger_total`).
+`commit_siblings` never engages: windows open with nothing in flight. So
+the knob was the idle window, pushed to 1,000 ms through `push-secrets.exs`
+(the buffer pods rolled 23:05Z, boot log `flush_idle_interval_ms=1000`).
+`SMOLQUERY_TOP_N_PROBE_ROWS` stayed at 100,000.
+
+| queriers | phase | probe 100k, 300 ms window | **1,000 ms window** |
+|---|---|---|---|
+| 1 | ingest, p50 / p95 / p99 | 763–806 / 1,206–1,230 / 1,505–1,625 | **685–706 / 1,078–1,129 / 1,169–1,299** |
+| 4 | ingest, p50 / p95 / p99 | 2,114–2,267 / 3,619–3,721 / 3,798–3,898 | **1,873–1,919 / 2,895–2,965 / 3,136–3,239** |
+| 4 | per query: segment GETs / HEADs / hot-server ms | 52 / 27 / 160 | **42 / 17 / 51** |
+| 4 | job time per query | 2.14 s | 1.79 s |
+| — | ingest at 32 VUs, rows/s / insert p50 | 90–95k / 0.97–0.99 s | **68.7–69.0k / 1.49–1.52 s** |
+| — | commits in the four-querier minute / rows per commit | 209 / 28,300 | 147 / 32,700 |
+
+Idle and sealed unchanged (0.61 s and 1.47 s); 100 rows on every query;
+zero errors and zero restarts.
+
+**The commits did not get 3× bigger.** They grew 16%, from 28k to 33k
+rows: 107 of 147 windows closed on the 1 s interval and 38 on the byte
+cap, and `FLUSH_MAX_BYTES` at 94 MB is ~10.5 bodies — the cap binds
+before a longer window can. What the tail query gained came from the
+other side of the closed loop: each VU waits ~0.5 s longer per ack, so
+32 VUs push 24% fewer bodies per second, the hot tier holds fewer
+segments at any moment (51–65 seen per query against 82–96), and every
+query opens fewer of them. That is a real effect on a closed-loop load
+and no effect at all on an open one: at a fixed rows/s the segment rate
+is the same and only the window length changes.
+
+So this run says two things. A tail query is cheaper when the hot tier is
+smaller — the same lesson as T-400, from the other direction. And the
+flush window is the wrong knob to make it smaller: to grow commits past
+~10 bodies the byte cap must move (`FLUSH_MAX_BYTES`, and with it
+`MAX_BUFFERED_BYTES` and the buffer heap — the 2026-08-20/21 seal-wall
+work is where those limits came from). Sealing faster is the other
+direction, and it costs sealed files and bytes per row (the 64-partition
+run).
+
+The cluster is left at 1,000 ms. On a closed-loop client that is +0.5 s
+on the insert ack for −0.1 s on the tail p50 and −0.3 s on its p99 at one
+querier; the number to decide it on is the insert ack, and 300 ms is the
+value to return to unless the tail matters more than the ack.
