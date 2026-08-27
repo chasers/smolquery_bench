@@ -309,3 +309,42 @@ rows of one project. `SMOLQUERY_TOP_N_PROBE_ROWS` exists as a knob, and
 
 Idle numbers are unchanged, as they should be. `distributed` remains a
 no-op.
+
+## Addendum 3, 22:1x–22:4xZ: `SMOLQUERY_TOP_N_PROBE_ROWS=100000`
+
+The knob went from its default of 1,000,000 to 100,000 on the query pods
+(`overlay/sandbox/statefulset-query.yaml`, rolled 22:15–22:16Z); same two
+runs, same query, same table.
+
+| queriers | phase | before T-400 | T-400 at 1,000,000 | **T-400 at 100,000** |
+|---|---|---|---|---|
+| 1 | ingest, p50 / p95 / p99 | 683–718 / 1,590–1,980 / 2,288–2,348 | 780–877 / 1,368–1,463 / 1,648–1,709 | **763–806 / 1,206–1,230 / 1,505–1,625** |
+| 4 | ingest, p50 / p95 / p99 | 1,732–1,905 / 3,905–4,277 / 4,600–4,770 | 2,330–2,344 / 3,572–3,669 / 3,740–3,909 | **2,114–2,267 / 3,619–3,721 / 3,798–3,898** |
+| 4 | per query: segment GETs / HEADs / hot-server ms | 292 / 205 / 930 | 122 / 63 / 252 | **52 / 27 / 160** |
+| 4 | job time per query | 1.96 s | 1.98 s | 2.14 s |
+| 1 | job time per query | — | — | 0.80 s |
+
+Ingest 90,666 (four) and 95,358 (one) rows/s; 100 rows on every query;
+zero errors; idle and sealed phases unchanged.
+
+The smaller budget did what the arithmetic said: the probe opens a quarter
+of the segments it opened at 1,000,000 (52 GETs per query against 122)
+and a sixth of what the query opened before T-400. The tail tightened
+again — one querier p95 1.21–1.23 s, a third under the pre-T-400 figure.
+**The median still did not come back**: 0.76–0.81 s against 0.68–0.72 s
+before T-400 at one querier, 2.1–2.3 s against 1.7–1.9 s at four, with the
+job time at four queriers *up* to 2.14 s. Opening 52 segments instead of
+122 saved nothing measurable on the job, so the probe's cost is not its
+breadth. It is its fixed shape: a `CREATE OR REPLACE VIEW` and a probe
+statement through the engine, per round, per query — two extra engine
+round trips on a path whose whole budget is a second, and at four
+queriers two more statements contending for the same engines and cores.
+
+So the knob is worth keeping at 100,000 over 1,000,000 on this stream
+(better p95, no worse p50), and T-403 is about the probe's round trips,
+not its budget: one round sized from the manifest's own row counts and
+the query's selectivity, the probe folded into the main statement, or a
+short-lived bound cache per (table, predicate) so a tenant tailing its log
+pays the probe once, not per poll. The bound is off entirely at
+`SMOLQUERY_TOP_N_PROBE_ROWS=0`; on the median alone that is the better
+setting today, on the tail it is not.

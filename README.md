@@ -753,7 +753,10 @@ four queriers is the per-job path itself, 1.16 s on an empty window.
 With T-400's Top-N bound (`main@caaf43c`): p95 under ingest down 14–26%,
 p99 down 20–28%, p50 up 0.1–0.5 s, the buffer pods' bill per query down
 2.4–4× — the probe's second round opens the whole hot tier at the default
-`SMOLQUERY_TOP_N_PROBE_ROWS` of 1,000,000
+`SMOLQUERY_TOP_N_PROBE_ROWS` of 1,000,000. At 100,000 the probe opens a
+quarter of that and one querier's p95 drops to 1.21 s, but the median stays
+0.1 s (one querier) to 0.4 s (four) above pre-T-400: the probe's two engine
+round trips, not its breadth, are the cost (T-403)
 ([results/2026-08-27-tail-under-ingest.md](results/2026-08-27-tail-under-ingest.md)).
 
 The pathological table, 2026-08-27: `partitions: 64` and 30 days of
