@@ -84,19 +84,27 @@ mise run bench-pruning               # BENCHES=pruning
 mise run bench-compaction            # BENCHES=compaction
 mise run bench-onebrc                # BENCHES=onebrc, TABLE=onebrc_v1
 mise run bench-onebrc-ingest         # BENCHES=onebrc, ingest only, one upload per worker count
+mise run bench-attrs                 # BENCHES=ingest,attrs; SHAPE, TABLE and VUS_LIST from the shell
 mise run bench-all                   # BENCHES=ingest,pruning,compaction
 BENCHES=ingest,pruning mise run bench-sweep
 ```
 
+**A task's own `env` block beats the shell.** `TABLE=onebrc_v5 mise run
+bench-onebrc` still runs into `onebrc_v1`, because the task sets `TABLE`
+itself. To pick a table or a worker list, bypass the task:
+`mise exec -- sh -c 'BASE_URL=… BENCHES=onebrc TABLE=onebrc_v5 elixir scripts/loadgen.exs sweep'`.
+`mise exec` loads the `[env]` block without the task env.
+
 | type | measures | writes |
 |---|---|---|
 | `ingest` | the VU sweep: rows/s, latency, refusals, pod CPU and memory | `<label>.k6.json`, `<label>.pods.json` |
+| `attrs` | project-scoped and unscoped attribute queries — count, a string key filter, a numeric key filter, an error-presence filter, a group-by on the route, a body `LIKE` — over hot ∪ sealed, then again after the hot tier drains; each case carries an `"explain": "analyze"` | `<label>.attrs.json` |
 | `pruning` | a `count` and a `scan` query against a live date, an empty date, and no filter; each case also records an `"explain": "analyze"` plan and its engine time | `<label>.prune.json` |
 | `compaction` | compaction outcomes and pod restarts over a long window | `<label>.compact.json` |
 | `onebrc` | the one billion row challenge, in spirit: generate a `station;temperature` CSV on the box, upload it as NDJSON inserts, then time the 1BRC aggregate ten times | `<label>.onebrc.json`, `<label>.upload.json` |
 
-The types always run in the order ingest, pruning, compaction, onebrc,
-whatever order you type them in. Pruning reads the rows ingest writes, and
+The types always run in the order ingest, attrs, pruning, compaction,
+onebrc, whatever order you type them in. Pruning reads the rows ingest writes, and
 compaction needs those rows sealed. `onebrc` stands alone: it has its own
 table, its own generator and its own uploader.
 
@@ -158,6 +166,18 @@ The seal and compaction series to read first:
 with ingest. A nonzero stuck or release-failure count means sealing is
 stalled.
 
+Since `main@18117bb` (T-379) the storage pods also carry the sealed object
+store's request series: `smolquery_s3_requests_total{op,class}`,
+`smolquery_s3_request_microseconds_total{op}`,
+`smolquery_s3_request_bytes_total{op}` and
+`smolquery_s3_request_microseconds_bucket{op,le}` (10 ms, 50 ms, 250 ms,
+1 s, 5 s). Ops are `put`, `head`, `list`, `delete` — no `get`, since reads
+go through DuckDB httpfs. One `put` is one seal attempt
+(`storage_service/merge.ex:300`), so put bytes equal
+`smolquery_seal_segment_bytes_total`. An empty bucket is omitted from the
+render; read a missing `le` line as zero. The HTML report lists these
+series in its trailing table and does not chart them yet.
+
 ## The HTML run report
 
 Every sweep writes a charted HTML report beside the markdown write-ups:
@@ -205,7 +225,18 @@ inlines them, so edit those files rather than the emitted HTML.
 
 - **Load**: `VUS`, `DURATION_S`, `WARMUP_S`, `ROWS`, `SEED`; `MODE=rate RATE=30`
   for an open loop.
-- **Row shape**: `SHAPE` (default `otel`, the 63-column body). `SHAPE=kv`
+- **Row shape**: `SHAPE` (default `otel`, the 63-column body).
+  `SHAPE=clickstack` generates the ClickStack logs layout — 15 scalar
+  columns plus `resource_attributes`, `scope_attributes` and
+  `log_attributes` as JSON objects, ~2,528 B/row — as
+  `bodies/clickstack.<rows>.ndjson`, for the `clickstack_*` tables. One
+  body serves both `clickstack_map_v2` and `clickstack_variant_v2`: a map
+  stores a number as its text, a variant keeps the type. `log_attributes`
+  carries an `ingest.stamp` key holding the same per-request stamp as
+  `inserted_at`, so every request's attribute bags are distinct — without
+  it the body's 3,062 rows repeat verbatim, Parquet dictionary-encodes the
+  whole bag, and a variant filter runs on dictionary entries instead of
+  rows (the `_v1` tables, 2026-08-27). `SHAPE=kv`
   generates small rows — `key`, `timestamp`, `value`, `inserted_at`, ~133 B/row
   — as `bodies/kv.<rows>.ndjson`, for table `kv_v1`. Pick `ROWS` so the body
   size stays comparable: 50,000 kv rows ≈ 6.4 MiB against the 6.87 MiB otel
@@ -229,6 +260,19 @@ inlines them, so edit those files rather than the emitted HTML.
   (default 3), `PRUNE_SETTLE_S` (default 30), `PRUNE_COLUMN` (default
   `duration_ms`) and `PRUNE_TIMEOUT_MS` (default 180000). Compaction takes
   `COMPACT_WATCH_S` (default 900).
+- **attrs**: `ATTR_TYPE` (`map`, `variant` or `flat`; inferred from the
+  table name when unset) picks the key-access syntax —
+  `log_attributes['k']`, `log_attributes['k']::VARCHAR`, or the flattened
+  column `k` with dots as underscores; `ATTRS_PROJECT` (default
+  `proj_0617`) is the scoped project — the body repeats per request, so a
+  project's rows are copies of its rows in the one body, and `proj_0617`
+  is one whose seven rows include a `POST`, a 5xx, an exception and a
+  slow-query body; `ATTRS_REPEATS` (default 3);
+  `ATTRS_TIERS` (default `union,sealed`) — `sealed` waits for an empty hot
+  tier first, `ATTRS_DRAIN_WAIT_S` (default 600) bounds the wait.
+- **explain**: every bench's `"explain": "analyze"` call has its own
+  `EXPLAIN_TIMEOUT_MS` (default 120,000). A lost explain response used to
+  cost the whole query timeout.
 - **onebrc**: `ONEBRC_ROWS` (default 1,000,000,000) sizes the CSV;
   `ONEBRC_UPLOAD=false` skips the generate and upload steps and only times
   the queries against the rows already in the table;
@@ -465,6 +509,32 @@ should match it exactly; a gap is a finding. The summary also carries
 a point whose `client_cores` nears the box's vCPU count measured the box,
 not the cluster.
 
+### Attributes: `MAP(STRING, STRING)` vs `VARIANT` vs flat columns
+
+`mise run bench-attrs` compares the two semi-structured column types
+smolquery gained in `main@43f1b30` (T-140, T-392) against the 63 flattened
+columns, on the ClickStack logs layout
+(<https://clickhouse.com/docs/clickstack/ingesting-data/schemas#logs>)
+with a `project` column first in the clustering key. One sweep per arm:
+
+```sh
+export VUS_LIST="8 32"
+SHAPE=clickstack TABLE=clickstack_map_v2     LABEL_SUFFIX=-attrs-map     mise run bench-attrs
+SHAPE=clickstack TABLE=clickstack_variant_v2 LABEL_SUFFIX=-attrs-variant mise run bench-attrs
+SHAPE=otel       TABLE=otel_logs_v34         LABEL_SUFFIX=-attrs-flat    mise run bench-attrs
+```
+
+Each sweep runs the ingest points, then the `attrs` query cases twice:
+over hot ∪ sealed right after the last point, and over sealed alone after
+the drain. Read three things per arm: rows/s and MiB/s from `*.k6.json`
+(the clickstack body is 7.5% larger per row than the flat one), bytes per
+sealed row from `smolquery_seal_segment_bytes_total` over
+`smolquery_seal_segment_rows_total` in the metrics database, and the query
+cases from `*.attrs.json`. **Neither type has statistics bounds, so a key
+filter never prunes** — only the `project` predicate can, and the plan says
+whether it did. A `VARIANT` column is JSON text on disk, parsed per scanned
+row, so the unscoped scan cases are where it pays.
+
 `mise run bench-onebrc-ingest` answers a third question: **at what
 concurrency does the upload stop scaling?** It runs the same upload once per
 value in `ONEBRC_WORKERS`, each into its own `<TABLE>_w<N>` table, with no
@@ -480,7 +550,7 @@ The instance is not Terraform-managed. It is found by tag
 ## Layout
 
 ```
-tools/genbody/        deterministic 63-column OTel NDJSON generator
+tools/genbody/        deterministic OTel NDJSON generator: 63 flat columns, kv, or the ClickStack layout
 tools/gen1brc/        the 1BRC measurements file generator, 413 stations, seeded
 tools/upload1brc/     streams a measurements file as idempotent NDJSON inserts
 tools/watch/          CPU and RSS sampler, ps-based, for the server and k6
@@ -565,9 +635,16 @@ Adding the column changed the schema, and smolquery answers 409 on a
 | `otel_logs_v20`–`v32` | same as v3 | clustering `[project_id, inserted_at]` | one fresh table per run: the 2026-08-20 partition sweep, then the 2026-08-21 memory sweep |
 | `otel_logs_v33` | same as v3 | clustering `[project_id, inserted_at]` | the 2026-08-21 96-VU parity run — the current record, and the current table |
 | `kv_v1` | `PARTITION BY toDate(inserted_at)`, `ORDER BY (key, inserted_at)` | clustering `[key, inserted_at]` | 4 columns (`key`, `timestamp`, `value`, `inserted_at`), ~133 B/row — the small-row bench, `SHAPE=kv` |
-| `onebrc_v1` | `ORDER BY (station)` | clustering `[station]` | 2 columns (`station` STRING, `temperature` FLOAT64), no `inserted_at`, ~42 B/row as NDJSON — the one billion row challenge, `BENCHES=onebrc` |
+| `onebrc_v1` | `ORDER BY (station)` | clustering `[station]` | 2 columns (`station` STRING, `temperature` FLOAT64), no `inserted_at`, ~42 B/row as NDJSON — the one billion row challenge, `BENCHES=onebrc`. **Holds 1,246,393,006 rows since 2026-08-25**, after an aborted launch — not a 1B table any more |
 | `onebrc_v2` | same | same | the 2026-08-22 16-worker upload |
 | `onebrc_v3_w<N>` | same | same | one table per point of the 2026-08-24 worker sweep, `mise run bench-onebrc-ingest`; any `onebrc*` table takes the `onebrc_v1` schema and clustering |
+| `onebrc_v4` | same | same | the 2026-08-24 48-worker follow-up, ingest only |
+| `onebrc_v5` | same | same | the 2026-08-25 48-worker re-check on `main@18117bb`, with the query phase — exactly 1B rows |
+| `onebrc_v6` | same | same | the 2026-08-26 48-worker re-check on `main@1a6a543` (F-1 and F-2 fixes), with the query phase — exactly 1B rows |
+| `otel_logs_v34` | same as v3 | clustering `[project_id, timestamp]` | the flat control for the 2026-08-27 attributes bench (T-393): the same 63 columns, fresh |
+| `clickstack_map_v1` | `ORDER BY (project, timestamp)` | clustering `[project, timestamp]` | the ClickStack logs layout, snake_case, plus `project` and `inserted_at`: 15 scalar columns and `resource_attributes`, `scope_attributes`, `log_attributes` as `MAP(STRING, STRING)`; `SHAPE=clickstack` |
+| `clickstack_variant_v1` | same, attributes as `JSON` | same | the same columns with the three attribute bags as `VARIANT` |
+| `clickstack_map_v2`, `clickstack_variant_v2` | same | same | the same schemas, fed the stamped body (`log_attributes['ingest.stamp']` varies per request) — the tables to compare; `_v1` hold the unstamped, dictionary-compressed rows |
 
 `otel_logs_v3` is what `TABLE` defaults to. It exists to answer one question:
 does a query for a single date read only that date's files?
@@ -587,9 +664,28 @@ collects NULLs in a partition of their own.
 The one billion row challenge, 2026-08-22: **1,000,000,000 two-column rows in
 113.3 s (8,825,572 rows/s, 352 MiB/s)** at 16 workers with zero refusals and
 zero restarts, `count(*)` exact; the 1BRC aggregate over them in **10.7 s
-median** distributed across the three storage pods, 27.5 s single-engine,
-`count(*)` 2.0 s. Neither upload run saturated the cluster. See
+median** distributed across the three api pods (the query role lives there,
+not on the storage tier), 27.5 s single-engine, `count(*)` 2.0 s. See
 [results/2026-08-22-one-billion-rows.md](results/2026-08-22-one-billion-rows.md).
+The worker curve, 2026-08-24: peak **10,008,571 rows/s at 64 workers**, knee
+at 32 ([results/2026-08-24-onebrc-ingest-worker-sweep.md](results/2026-08-24-onebrc-ingest-worker-sweep.md)).
+Re-checked 2026-08-25 on `main@18117bb` at 48 workers: 9,649,356 rows/s,
+10.80 s aggregate. That run also read the first S3 request timings: **82
+`put` requests for the whole billion, 178 ms and 15.8 MB each, 5.5% of seal
+time** ([results/2026-08-25-onebrc-v5-and-s3-timings.md](results/2026-08-25-onebrc-v5-and-s3-timings.md)).
+Re-checked again 2026-08-26 on `main@1a6a543` (the F-1 and F-2 replication
+fixes): 9,703,402 rows/s in 103.1 s, 11.30 s aggregate, 78 puts at 188 ms —
+the fixes cost nothing on a clean upload
+([results/2026-08-26-onebrc-v6-post-f1-f2.md](results/2026-08-26-onebrc-v6-post-f1-f2.md)).
+
+Attribute bags, 2026-08-27 (T-393, `main@43f1b30`): **`MAP(STRING, STRING)`
+is the type to recommend.** With per-row unique values in the bag, every
+query naming a `VARIANT` column over 7.9M rows dies on the 1 GB engine
+limit (DuckDB `Out of Memory`, 128 MiB chunk); the map answers the same key
+filter in 2.8 s, flat columns in 1.5 s. Ingest at 32 VUs: variant 148k
+rows/s, flat 132k, map 102k (the map re-encodes every row). Clustering by
+`project` prunes row groups, never files
+([results/2026-08-27-clickstack-map-vs-variant.md](results/2026-08-27-clickstack-map-vs-variant.md)).
 
 load-rig, on an M1 Pro with 10 cores and 16 GB: smolquery peaked at **383,157
 rows/s** (32 VU, pool=4, enc=4), ClickHouse at **165,814 rows/s** with matching

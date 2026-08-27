@@ -21,8 +21,10 @@ defmodule Bench do
   def table, do: env("TABLE", "otel_logs_v3")
 
   @doc """
-  The body's row shape: `otel` (63 columns, the default) or `kv`
-  (`key`, `timestamp`, `value`, `inserted_at`). The otel body keeps its
+  The body's row shape: `otel` (63 columns, the default), `kv`
+  (`key`, `timestamp`, `value`, `inserted_at`), or `clickstack` (the
+  ClickStack logs layout: scalar columns plus three attribute objects, for
+  the `clickstack_*` tables). The otel body keeps its
   historical `eachrow.<rows>.ndjson` name; other shapes name the file
   after the shape.
   """
@@ -50,6 +52,8 @@ defmodule Bench do
   end
 
   defp default_clustering("otel_logs_v3"), do: ["project_id"]
+  defp default_clustering("otel_logs_v34"), do: ["project_id", "timestamp"]
+  defp default_clustering("clickstack" <> _), do: ["project", "timestamp"]
   defp default_clustering("otel_logs_v4"), do: ["project_id", "timestamp"]
   defp default_clustering("otel_logs_v5"), do: ["project_id", "inserted_at"]
   defp default_clustering("otel_logs_v6"), do: ["project_id", "inserted_at"]
@@ -84,7 +88,7 @@ defmodule Bench do
   defp default_clustering("onebrc" <> _), do: ["station"]
   defp default_clustering(_table), do: ["project_id", "timestamp"]
 
-  @bench_types ~w(ingest pruning compaction onebrc)
+  @bench_types ~w(ingest attrs pruning compaction onebrc)
 
   @doc """
   The bench types to run, from `BENCHES`, as a comma-separated list.

@@ -1,0 +1,77 @@
+{
+  "id": "clickstack_variant_v2",
+  "schema": [
+    {
+      "name": "project",
+      "type": "STRING"
+    },
+    {
+      "name": "timestamp",
+      "type": "TIMESTAMP"
+    },
+    {
+      "name": "trace_id",
+      "type": "STRING"
+    },
+    {
+      "name": "span_id",
+      "type": "STRING"
+    },
+    {
+      "name": "trace_flags",
+      "type": "INT64"
+    },
+    {
+      "name": "severity_text",
+      "type": "STRING"
+    },
+    {
+      "name": "severity_number",
+      "type": "INT64"
+    },
+    {
+      "name": "service_name",
+      "type": "STRING"
+    },
+    {
+      "name": "body",
+      "type": "STRING"
+    },
+    {
+      "name": "resource_schema_url",
+      "type": "STRING"
+    },
+    {
+      "name": "resource_attributes",
+      "type": "VARIANT"
+    },
+    {
+      "name": "scope_schema_url",
+      "type": "STRING"
+    },
+    {
+      "name": "scope_name",
+      "type": "STRING"
+    },
+    {
+      "name": "scope_version",
+      "type": "STRING"
+    },
+    {
+      "name": "scope_attributes",
+      "type": "VARIANT"
+    },
+    {
+      "name": "log_attributes",
+      "type": "VARIANT"
+    },
+    {
+      "name": "event_name",
+      "type": "STRING"
+    },
+    {
+      "name": "inserted_at",
+      "type": "TIMESTAMP"
+    }
+  ]
+}

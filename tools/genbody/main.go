@@ -95,6 +95,117 @@ type kvRow struct {
 
 var kvNames = []string{"cart.items", "cache.hits", "queue.depth", "session.count", "request.bytes"}
 
+type attributes map[string]any
+
+type clickstackRow struct {
+	Project            string     `json:"project"`
+	Timestamp          string     `json:"timestamp"`
+	TraceID            string     `json:"trace_id"`
+	SpanID             string     `json:"span_id"`
+	TraceFlags         int        `json:"trace_flags"`
+	SeverityText       string     `json:"severity_text"`
+	SeverityNumber     int        `json:"severity_number"`
+	ServiceName        string     `json:"service_name"`
+	Body               string     `json:"body"`
+	ResourceSchemaURL  string     `json:"resource_schema_url"`
+	ResourceAttributes attributes `json:"resource_attributes"`
+	ScopeSchemaURL     string     `json:"scope_schema_url"`
+	ScopeName          string     `json:"scope_name"`
+	ScopeVersion       string     `json:"scope_version"`
+	ScopeAttributes    attributes `json:"scope_attributes"`
+	LogAttributes      attributes `json:"log_attributes"`
+	EventName          string     `json:"event_name"`
+	InsertedAt         string     `json:"inserted_at"`
+}
+
+const semconvSchemaURL = "https://opentelemetry.io/schemas/1.28.0"
+
+func generateClickstack(r *rand.Rand, base time.Time, i, projects int) clickstackRow {
+	flat := generate(r, base, i, projects)
+
+	resource := attributes{
+		"service.name":            flat.ServiceName,
+		"service.namespace":       flat.ServiceNamespace,
+		"service.version":         flat.ServiceVersion,
+		"service.instance.id":     flat.ServiceInstanceID,
+		"deployment.environment":  flat.DeploymentEnvironment,
+		"cloud.provider":          flat.CloudProvider,
+		"cloud.region":            flat.CloudRegion,
+		"cloud.availability_zone": flat.CloudAvailabilityZone,
+		"cloud.account.id":        flat.CloudAccountID,
+		"k8s.cluster.name":        flat.K8sClusterName,
+		"k8s.namespace.name":      flat.K8sNamespaceName,
+		"k8s.deployment.name":     flat.K8sDeploymentName,
+		"k8s.pod.name":            flat.K8sPodName,
+		"k8s.pod.uid":             flat.K8sPodUID,
+		"k8s.container.name":      flat.K8sContainerName,
+		"k8s.node.name":           flat.K8sNodeName,
+		"host.name":               flat.HostName,
+		"host.arch":               flat.HostArch,
+		"os.type":                 flat.OsType,
+		"os.version":              flat.OsVersion,
+		"container.id":            flat.ContainerID,
+		"container.image.tag":     flat.ContainerImageTag,
+		"telemetry.sdk.name":      flat.TelemetrySdkName,
+		"telemetry.sdk.language":  flat.TelemetrySdkLanguage,
+		"telemetry.sdk.version":   flat.TelemetrySdkVersion,
+	}
+
+	logAttrs := attributes{
+		"observed_timestamp":        flat.ObservedTimestamp,
+		"dropped_attributes_count":  flat.DroppedAttributesCount,
+		"code.namespace":            flat.CodeNamespace,
+		"code.function":             flat.CodeFunction,
+		"code.lineno":               flat.CodeLineno,
+		"http.request.method":       flat.HTTPRequestMethod,
+		"http.route":                flat.HTTPRoute,
+		"http.response.status_code": flat.HTTPResponseStatusCode,
+		"http.request.body.size":    flat.HTTPRequestBodySize,
+		"http.response.body.size":   flat.HTTPResponseBodySize,
+		"url.path":                  flat.URLPath,
+		"url.scheme":                flat.URLScheme,
+		"network.protocol.version":  flat.NetworkProtocolVersion,
+		"user_agent.original":       flat.UserAgentOriginal,
+		"client.address":            flat.ClientAddress,
+		"server.address":            flat.ServerAddress,
+		"server.port":               flat.ServerPort,
+		"duration_ms":               flat.DurationMs,
+		"enduser.id":                flat.EnduserID,
+		"session.id":                flat.SessionID,
+		"thread.name":               flat.ThreadName,
+		"log.file.path":             flat.LogFilePath,
+		"sampled":                   flat.Sampled,
+		"ingest.stamp":              insertedAtPlaceholder,
+	}
+	if flat.ErrorType != nil {
+		logAttrs["error.type"] = *flat.ErrorType
+		logAttrs["exception.type"] = *flat.ExceptionType
+		logAttrs["exception.message"] = *flat.ExceptionMessage
+		logAttrs["exception.stacktrace"] = *flat.ExceptionStacktrace
+	}
+
+	return clickstackRow{
+		Project:            flat.ProjectID,
+		Timestamp:          flat.Timestamp,
+		TraceID:            flat.TraceID,
+		SpanID:             flat.SpanID,
+		TraceFlags:         flat.TraceFlags,
+		SeverityText:       flat.SeverityText,
+		SeverityNumber:     flat.SeverityNumber,
+		ServiceName:        flat.ServiceName,
+		Body:               flat.Body,
+		ResourceSchemaURL:  semconvSchemaURL,
+		ResourceAttributes: resource,
+		ScopeSchemaURL:     semconvSchemaURL,
+		ScopeName:          flat.ScopeName,
+		ScopeVersion:       flat.ScopeVersion,
+		ScopeAttributes:    attributes{"otel.scope.kind": "http"},
+		LogAttributes:      logAttrs,
+		EventName:          "http.request",
+		InsertedAt:         insertedAtPlaceholder,
+	}
+}
+
 func generateKV(r *rand.Rand, base time.Time, i, projects int) kvRow {
 	return kvRow{
 		Key:        fmt.Sprintf("proj_%04d:%s", r.Intn(projects), pick(r, kvNames)),
@@ -300,14 +411,14 @@ func main() {
 	seed := flag.Int64("seed", 42, "PRNG seed for reproducible bodies")
 	out := flag.String("out", "", "output file path (required)")
 	baseDate := flag.String("base-date", "", "timestamp date as YYYY-MM-DD (default: today UTC)")
-	shape := flag.String("shape", "otel", "row shape: otel (63 columns) or kv (key, timestamp, value)")
+	shape := flag.String("shape", "otel", "row shape: otel (63 columns), kv (key, timestamp, value), or clickstack (ClickStack logs layout with attribute maps)")
 	flag.Parse()
 
 	if *out == "" {
 		log.Fatal("-out is required")
 	}
-	if *shape != "otel" && *shape != "kv" {
-		log.Fatalf("-shape must be otel or kv, got %q", *shape)
+	if *shape != "otel" && *shape != "kv" && *shape != "clickstack" {
+		log.Fatalf("-shape must be otel, kv or clickstack, got %q", *shape)
 	}
 	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
 		log.Fatal(err)
@@ -330,9 +441,12 @@ func main() {
 
 	for i := 0; i < *rows; i++ {
 		var encodeErr error
-		if *shape == "kv" {
+		switch *shape {
+		case "kv":
 			encodeErr = enc.Encode(generateKV(r, base, i, *projects))
-		} else {
+		case "clickstack":
+			encodeErr = enc.Encode(generateClickstack(r, base, i, *projects))
+		default:
 			encodeErr = enc.Encode(generate(r, base, i, *projects))
 		}
 		if encodeErr != nil {
