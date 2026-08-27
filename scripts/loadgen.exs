@@ -552,6 +552,7 @@ defmodule Bench.Loadgen do
 
       case bench do
         "ingest" -> run_ingest(id, dataset, table, urls, key, watcher)
+        "attrs" -> run_attrs(dataset, table, key, watcher)
         "pruning" -> run_pruning(dataset, table, key)
         "compaction" -> run_compaction()
         "onebrc" -> run_onebrc(id, dataset, table, key, watcher)
@@ -692,6 +693,151 @@ defmodule Bench.Loadgen do
   defp drain_outcome(%{waited_s: waited_s, hot_files: hot_files}),
     do: "NOT drained after #{waited_s}s (#{inspect(hot_files)} hot files) — continuing"
 
+  # ── bench: attrs ───────────────────────────────────────────────────────────
+
+  defp attrs_repeats, do: Bench.env_int("ATTRS_REPEATS", 3)
+
+  defp attrs_project, do: Bench.env("ATTRS_PROJECT", "proj_0617")
+
+  defp attrs_tiers do
+    "ATTRS_TIERS" |> Bench.env("union,sealed") |> String.split(",", trim: true)
+  end
+
+  defp attrs_drain_wait_s, do: Bench.env_int("ATTRS_DRAIN_WAIT_S", 600)
+
+  defp attr_type(table) do
+    case Bench.env("ATTR_TYPE", "") do
+      "" ->
+        cond do
+          String.contains?(table, "variant") -> "variant"
+          String.contains?(table, "map") -> "map"
+          true -> "flat"
+        end
+
+      type when type in ~w(map variant flat) ->
+        type
+
+      other ->
+        Bench.fatal!("ATTR_TYPE must be map, variant or flat, got #{inspect(other)}")
+    end
+  end
+
+  defp attr_string("map", key), do: "log_attributes['#{key}']"
+  defp attr_string("variant", key), do: "log_attributes['#{key}']::VARCHAR"
+  defp attr_string("flat", key), do: flat_column(key)
+
+  defp attr_int("flat", key), do: flat_column(key)
+  defp attr_int(_type, key), do: "TRY_CAST(log_attributes['#{key}'] AS BIGINT)"
+
+  defp attr_present("map", key), do: "map_contains(log_attributes, '#{key}')"
+  defp attr_present("variant", key), do: "log_attributes['#{key}'] IS NOT NULL"
+  defp attr_present("flat", key), do: "#{flat_column(key)} IS NOT NULL"
+
+  defp flat_column(key), do: String.replace(key, ".", "_")
+
+  defp project_column("flat"), do: "project_id"
+  defp project_column(_type), do: "project"
+
+  defp attrs_cases(ref, type) do
+    project = "#{project_column(type)} = '#{attrs_project()}'"
+    method = attr_string(type, "http.request.method")
+    status = attr_int(type, "http.response.status_code")
+    route = attr_string(type, "http.route")
+    errors = attr_present(type, "exception.type")
+
+    scoped = [
+      {"count", "SELECT count(*) AS n FROM #{ref} WHERE %{where}"},
+      {"method", "SELECT count(*) AS n FROM #{ref} WHERE %{where} AND #{method} = 'POST'"},
+      {"status", "SELECT count(*) AS n FROM #{ref} WHERE %{where} AND #{status} >= 500"},
+      {"errors", "SELECT count(*) AS n FROM #{ref} WHERE %{where} AND #{errors}"},
+      {"route-group",
+       "SELECT #{route} AS route, count(*) AS n FROM #{ref} WHERE %{where} " <>
+         "GROUP BY 1 ORDER BY 2 DESC LIMIT 10"},
+      {"body-like",
+       "SELECT count(*) AS n FROM #{ref} WHERE %{where} AND body LIKE '%slow query%'"}
+    ]
+
+    Enum.flat_map(scoped, fn {name, template} ->
+      [
+        {"#{name}-project", String.replace(template, "%{where}", project)},
+        {"#{name}-all", String.replace(template, "%{where}", "1 = 1")}
+      ]
+    end)
+  end
+
+  defp run_attrs(dataset, table, key, watcher) do
+    url = "#{Bench.Remote.base_url()}/v1/queries"
+    ref = "#{dataset}.#{table}"
+    type = attr_type(table)
+    cases = attrs_cases(ref, type)
+
+    IO.puts("
+== attrs: #{ref} as #{type}, project #{attrs_project()}, tiers #{Enum.join(attrs_tiers(), ", ")}")
+
+    tiers =
+      Enum.map(attrs_tiers(), fn tier ->
+        if tier == "sealed" do
+          Bench.WatchMetrics.set_phase(watcher, "attrs-drain")
+          drain = await_hot_drain(dataset, table, key, attrs_drain_wait_s())
+          IO.puts("== attrs: hot tier #{drain_outcome(drain)}")
+        end
+
+        Bench.WatchMetrics.set_phase(watcher, "attrs-#{tier}")
+        hot_files = hot_files(url, key, count_query(ref, "1971-01-01"))
+        IO.puts("== attrs: tier #{tier}, #{inspect(hot_files)} hot file(s) at start")
+
+        results = Enum.map(cases, fn {name, sql} -> attrs_case(url, key, name, sql) end)
+        %{"tier" => tier, "hot_files_at_start" => hot_files, "cases" => results}
+      end)
+
+    label = "loadgen-attrs#{label_suffix()}"
+
+    payload = %{
+      "inserted_at" => now_iso(),
+      "table" => ref,
+      "attr_type" => type,
+      "project" => attrs_project(),
+      "repeats" => attrs_repeats(),
+      "tiers" => tiers
+    }
+
+    File.write!(Path.join(results_dir(), "#{label}.attrs.json"), JSON.encode!(payload) <> "
+")
+    IO.puts("== attrs → #{label}.attrs.json")
+  end
+
+  defp attrs_case(url, key, name, sql) do
+    measured = Enum.map(1..attrs_repeats(), fn _ -> time_query(url, key, sql) end)
+    ok = Enum.filter(measured, &(&1.error == nil))
+    explained = explain_query(url, key, sql)
+
+    summary = %{
+      "case" => name,
+      "sql" => sql,
+      "wall_ms_min" => ok |> Enum.map(& &1.wall_ms) |> min_or_nil(),
+      "wall_ms_med" => ok |> Enum.map(& &1.wall_ms) |> median_or_nil(),
+      "duration_ms_med" => ok |> Enum.map(& &1.duration_ms) |> median_or_nil(),
+      "rows" => ok |> Enum.map(& &1.rows) |> List.first(),
+      "errors" => Enum.count(measured, &(&1.error != nil)),
+      "first_error" =>
+        case Enum.find(measured, &(&1.error != nil)) do
+          nil -> nil
+          failed -> failed.error
+        end,
+      "engine_total_s" => explained.engine_total_s,
+      "explain_analyze" => explained.plan,
+      "explain_error" => explained.error
+    }
+
+    IO.puts(
+      "== #{name}: wall med #{summary["wall_ms_med"]}ms, " <>
+        "durationMs med #{summary["duration_ms_med"]}, rows #{summary["rows"]}, " <>
+        "errors #{summary["errors"]}, engine #{summary["engine_total_s"] || "?"}s"
+    )
+
+    summary
+  end
+
   # ── bench: pruning ─────────────────────────────────────────────────────────
 
   defp prune_repeats, do: Bench.env_int("PRUNE_REPEATS", 3)
@@ -822,7 +968,7 @@ defmodule Bench.Loadgen do
 
   defp explain_query(url, key, sql, options \\ %{}) do
     headers = [{"authorization", "Bearer #{key}"}]
-    timeout_ms = Map.get(options, "timeoutMs", Bench.env_int("PRUNE_TIMEOUT_MS", 180_000))
+    timeout_ms = Map.get(options, "timeoutMs", Bench.env_int("EXPLAIN_TIMEOUT_MS", 120_000))
 
     body =
       %{"query" => sql, "explain" => "analyze", "timeoutMs" => timeout_ms}

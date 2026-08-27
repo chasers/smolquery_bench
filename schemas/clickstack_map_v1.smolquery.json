@@ -1,0 +1,77 @@
+{
+  "id": "clickstack_map_v1",
+  "schema": [
+    {
+      "name": "project",
+      "type": "STRING"
+    },
+    {
+      "name": "timestamp",
+      "type": "TIMESTAMP"
+    },
+    {
+      "name": "trace_id",
+      "type": "STRING"
+    },
+    {
+      "name": "span_id",
+      "type": "STRING"
+    },
+    {
+      "name": "trace_flags",
+      "type": "INT64"
+    },
+    {
+      "name": "severity_text",
+      "type": "STRING"
+    },
+    {
+      "name": "severity_number",
+      "type": "INT64"
+    },
+    {
+      "name": "service_name",
+      "type": "STRING"
+    },
+    {
+      "name": "body",
+      "type": "STRING"
+    },
+    {
+      "name": "resource_schema_url",
+      "type": "STRING"
+    },
+    {
+      "name": "resource_attributes",
+      "type": "MAP(STRING, STRING)"
+    },
+    {
+      "name": "scope_schema_url",
+      "type": "STRING"
+    },
+    {
+      "name": "scope_name",
+      "type": "STRING"
+    },
+    {
+      "name": "scope_version",
+      "type": "STRING"
+    },
+    {
+      "name": "scope_attributes",
+      "type": "MAP(STRING, STRING)"
+    },
+    {
+      "name": "log_attributes",
+      "type": "MAP(STRING, STRING)"
+    },
+    {
+      "name": "event_name",
+      "type": "STRING"
+    },
+    {
+      "name": "inserted_at",
+      "type": "TIMESTAMP"
+    }
+  ]
+}

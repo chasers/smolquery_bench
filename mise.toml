@@ -85,6 +85,11 @@ description = "One billion rows, ingest only: one full upload per worker count i
 env = { BENCHES = "onebrc", TABLE = "onebrc_v3", ONEBRC_QUERIES = "false", ONEBRC_WORKERS = "16 32 48 64 96 128", ONEBRC_UPLOAD_DEADLINE_S = "600" }
 run = "elixir scripts/loadgen.exs sweep"
 
+[tasks.bench-attrs]
+description = "Attributes bench: the ingest sweep, then project-scoped attribute queries over hot ∪ sealed and sealed (set SHAPE, TABLE, LABEL_SUFFIX and VUS_LIST in the shell)"
+env = { BENCHES = "ingest,attrs" }
+run = "elixir scripts/loadgen.exs sweep"
+
 [tasks.bench-all]
 description = "All three benches in order: ingest, then pruning, then compaction"
 env = { BENCHES = "ingest,pruning,compaction" }
