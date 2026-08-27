@@ -257,3 +257,55 @@ ingest**, with a p95 of 1.6–2.0 s under ingest that is the hot-tier fetch
 (~290 segment GETs and ~200 HEADs per query, 0.9 s of hot-server time —
 T-400). Four projects back to back do not: 1.3 s idle, 1.7–1.9 s under
 ingest. `distributed` is a no-op throughout (`shards 0`).
+
+## Addendum 2, 21:5x–22:2xZ: the Top-N bound over the hot manifest (T-400) on the cluster
+
+`main@caaf43c` rolled 21:49Z: T-400 layers 1 and 2 (`top_n.ex`), plus the
+Polars writer removal. Same two runs as the warm-4 comparison, same query,
+same table, same cluster otherwise (`SMOLQUERY_TOP_N_PROBE_ROWS` at its
+default, 1,000,000).
+
+| queriers | phase | ingest | before (warm 4) p50 / p95 / p99 | **with T-400** p50 / p95 / p99 |
+|---|---|---|---|---|
+| 1 | idle | — | 614–616 / 676–698 / 688–740 | 617–635 / 704–763 / 915–971 |
+| 1 | ingest, 32 VUs | 93,478 rows/s | 683–718 / **1,590–1,980** / 2,288–2,348 | 780–877 / **1,368–1,463** / 1,648–1,709 |
+| 1 | sealed | — | 628–635 / 677–705 / 687–743 | 633–635 / 695–707 / 709–718 |
+| 4 | idle | — | 1,270–1,307 / 1,424–1,435 / 1,436–1,473 | 1,383 / 1,667 / 1,771 (single) |
+| 4 | ingest, 32 VUs | 90,198 rows/s | 1,732–1,905 / **3,905–4,277** / 4,600–4,770 | 2,330–2,344 / **3,572–3,669** / 3,740–3,909 |
+| 4 | sealed | — | 1,467–1,498 / 1,792–1,793 / 1,821–1,851 | 1,500–1,514 / 1,796–1,821 / 1,859–1,871 |
+
+Wall in ms; 100 rows on every query where the window held data; zero
+errors. The bound touches only the ingest phases (it is skipped under 8
+hot entries), and there it **cuts the tail and costs the median**: p95
+down 14–26%, p99 down 20–28%, p50 up 0.1 s at one querier and 0.5 s at
+four.
+
+What the buffer pods saw per query in the four-querier ingest phase:
+
+| per query | warm 4 | with T-400 |
+|---|---|---|
+| segment GETs | 292 | **122** |
+| segment HEADs | 205 | **63** |
+| hot-tier bytes | 11 MB | **2.5 MB** |
+| hot-server time | 930 ms | **252 ms** |
+| job time | 1.96 s | 1.98 s |
+
+The hot tier's bill fell 2.4–4×, and the job took the same time. The
+reason is in `top_n.ex:220-227`: round 1 probes the newest entries whose
+row counts cover `n` = 100, and when they hold fewer than 100 matching
+rows, round 2 probes the newest whose rows cover `top_n_probe_rows`,
+1,000,000 by default. On this stream a micro-segment is one 3,062-row
+body and a project is 0.23% of the rows, so round 1 finds ~7 matches in
+one segment and round 2 opens ~330 segments' worth — the whole hot tier.
+The bound it finds then prunes the *final* scan to the ~15 newest
+segments (that is the 2.4–4× on the buffer pods), but the probe already
+opened everything once. The 122 GETs per query are mostly the probe.
+
+The fix shape is a round-2 budget that follows the selectivity, or a
+geometric ladder (`n × 10`, `n × 100`, …) that stops as soon as `n`
+matches are in hand; on this stream ~50,000 rows of candidates hold 100
+rows of one project. `SMOLQUERY_TOP_N_PROBE_ROWS` exists as a knob, and
+100,000 would be the first thing to try on this cluster.
+
+Idle numbers are unchanged, as they should be. `distributed` remains a
+no-op.
