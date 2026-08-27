@@ -374,6 +374,13 @@ defmodule Bench.Loadgen do
     build_body(id)
   end
 
+  defp days_flag do
+    case Bench.env("DAYS", "0") do
+      "0" -> ""
+      days -> " -days #{days}"
+    end
+  end
+
   defp build_body(id) do
     base_date =
       case Bench.env("BASE_DATE", "") do
@@ -386,7 +393,7 @@ defmodule Bench.Loadgen do
     cd #{remote_dir()}
     export PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local GOPATH=/opt/go GOCACHE=/opt/go/cache
     go build -o genbody ./tools/genbody
-    ./genbody -shape #{Bench.shape()} -rows #{rows()} -projects 1000 -seed 42#{base_date} -out #{body_file()}
+    ./genbody -shape #{Bench.shape()} -rows #{rows()} -projects 1000 -seed 42#{base_date}#{days_flag()} -out #{body_file()}
     ls -l #{body_file()}
     """)
   end

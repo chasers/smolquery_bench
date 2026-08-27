@@ -226,7 +226,12 @@ inlines them, so edit those files rather than the emitted HTML.
 ## Knobs
 
 - **Load**: `VUS`, `DURATION_S`, `WARMUP_S`, `ROWS`, `SEED`; `MODE=rate RATE=30`
-  for an open loop.
+  for an open loop. `DAYS=30` spreads each row's `timestamp` uniformly over
+  the last 30 days (default 0: one day, ordered by row), so a date bound
+  prunes nothing — the pathological shape. `PARTITIONS=64` sets the
+  table's write-partition count after the clustering (`PATCH
+  {"partitions": N}`, raise-only, at most 64): 64 independent commit and
+  seal streams for one table.
 - **Row shape**: `SHAPE` (default `otel`, the 63-column body).
   `SHAPE=clickstack` generates the ClickStack logs layout — 15 scalar
   columns plus `resource_attributes`, `scope_attributes` and
@@ -692,6 +697,7 @@ Adding the column changed the schema, and smolquery answers 409 on a
 | `clickstack_map_v1` | `ORDER BY (project, timestamp)` | clustering `[project, timestamp]` | the ClickStack logs layout, snake_case, plus `project` and `inserted_at`: 15 scalar columns and `resource_attributes`, `scope_attributes`, `log_attributes` as `MAP(STRING, STRING)`; `SHAPE=clickstack` |
 | `clickstack_variant_v1` | same, attributes as `JSON` | same | the same columns with the three attribute bags as `VARIANT` |
 | `clickstack_map_v2`, `clickstack_variant_v2` | same | same | the same schemas, fed the stamped body (`log_attributes['ingest.stamp']` varies per request) — the tables to compare; `_v1` hold the unstamped, dictionary-compressed rows |
+| `clickstack_map_p64` | `PARTITION BY (project, toDate(timestamp))` | same, `partitions: 64` | the 2026-08-27 pathological table: 64 write partitions and `DAYS=30` timestamps — the nearest smolquery analog of a per-project, per-day partition key |
 
 `otel_logs_v3` is what `TABLE` defaults to. It exists to answer one question:
 does a query for a single date read only that date's files?
@@ -745,6 +751,14 @@ project and 3.2 s / 5.1–5.4 s for four. `distributed` is a no-op
 hot-tier fetch, ~300 segment requests per query (T-400); what remains at
 four queriers is the per-job path itself, 1.16 s on an empty window
 ([results/2026-08-27-tail-under-ingest.md](results/2026-08-27-tail-under-ingest.md)).
+
+The pathological table, 2026-08-27: `partitions: 64` and 30 days of
+timestamps on the same shape. **Ingest 111,836 rows/s, and the tail query
+under it p50 7.2–7.5 s, p95 21–22 s**, ~650 hot files per query, a 269 s
+drain, 128 seals at 20 B/row, and a one-day `timestamp` bound reading every
+file. `partitions` is seal fan-out, not layout; out-of-order event time
+defeats date pruning
+([results/2026-08-27-partitions-64.md](results/2026-08-27-partitions-64.md)).
 
 load-rig, on an M1 Pro with 10 cores and 16 GB: smolquery peaked at **383,157
 rows/s** (32 VU, pool=4, enc=4), ClickHouse at **165,814 rows/s** with matching
