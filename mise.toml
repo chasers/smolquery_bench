@@ -90,6 +90,11 @@ description = "Attributes bench: the ingest sweep, then project-scoped attribute
 env = { BENCHES = "ingest,attrs" }
 run = "elixir scripts/loadgen.exs sweep"
 
+[tasks.bench-tail]
+description = "Tail bench: the last 100 events per project, distributed vs single-engine, idle, under ingest, and sealed (set SHAPE, TABLE, LABEL_SUFFIX, TAIL_INGEST_VUS in the shell)"
+env = { BENCHES = "tail" }
+run = "elixir scripts/loadgen.exs sweep"
+
 [tasks.bench-all]
 description = "All three benches in order: ingest, then pruning, then compaction"
 env = { BENCHES = "ingest,pruning,compaction" }

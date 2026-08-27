@@ -85,6 +85,7 @@ mise run bench-compaction            # BENCHES=compaction
 mise run bench-onebrc                # BENCHES=onebrc, TABLE=onebrc_v1
 mise run bench-onebrc-ingest         # BENCHES=onebrc, ingest only, one upload per worker count
 mise run bench-attrs                 # BENCHES=ingest,attrs; SHAPE, TABLE and VUS_LIST from the shell
+mise run bench-tail                  # BENCHES=tail; the last 100 events per project while ingest runs
 mise run bench-all                   # BENCHES=ingest,pruning,compaction
 BENCHES=ingest,pruning mise run bench-sweep
 ```
@@ -98,13 +99,14 @@ itself. To pick a table or a worker list, bypass the task:
 | type | measures | writes |
 |---|---|---|
 | `ingest` | the VU sweep: rows/s, latency, refusals, pod CPU and memory | `<label>.k6.json`, `<label>.pods.json` |
+| `tail` | the last 100 events for each of several projects, queried back to back from the box, `distributed` alternating true and false — idle, during a measured ingest point, and after the drain | `<label>.tail.json` per phase, `loadgen-tail<suffix>.tail.json` index, `loadgen-tail-vus<N><suffix>.k6.json` and `.pods.json` for the ingest point |
 | `attrs` | project-scoped and unscoped attribute queries — count, a string key filter, a numeric key filter, an error-presence filter, a group-by on the route, a body `LIKE` — over hot ∪ sealed, then again after the hot tier drains; each case carries an `"explain": "analyze"` | `<label>.attrs.json` |
 | `pruning` | a `count` and a `scan` query against a live date, an empty date, and no filter; each case also records an `"explain": "analyze"` plan and its engine time | `<label>.prune.json` |
 | `compaction` | compaction outcomes and pod restarts over a long window | `<label>.compact.json` |
 | `onebrc` | the one billion row challenge, in spirit: generate a `station;temperature` CSV on the box, upload it as NDJSON inserts, then time the 1BRC aggregate ten times | `<label>.onebrc.json`, `<label>.upload.json` |
 
-The types always run in the order ingest, attrs, pruning, compaction,
-onebrc, whatever order you type them in. Pruning reads the rows ingest writes, and
+The types always run in the order ingest, attrs, tail, pruning,
+compaction, onebrc, whatever order you type them in. Pruning reads the rows ingest writes, and
 compaction needs those rows sealed. `onebrc` stands alone: it has its own
 table, its own generator and its own uploader.
 
@@ -270,6 +272,18 @@ inlines them, so edit those files rather than the emitted HTML.
   slow-query body; `ATTRS_REPEATS` (default 3);
   `ATTRS_TIERS` (default `union,sealed`) — `sealed` waits for an empty hot
   tier first, `ATTRS_DRAIN_WAIT_S` (default 600) bounds the wait.
+- **tail**: `TAIL_VUS` (default 4) query VUs, one project each from
+  `TAIL_PROJECTS` (default `proj_0617,proj_0589,proj_0878,proj_0809`,
+  projects with seven or more rows per body); `TAIL_DURATION_S` (default
+  60) per phase; `TAIL_INGEST_VUS` (default `32`, a list runs one ingest
+  phase per value); `TAIL_LIMIT` (100); `TAIL_ORDER` (`inserted_at` — the
+  per-request stamp, so the real "last 100"; `timestamp` repeats per body
+  and ties); `TAIL_COLUMNS` (default `timestamp, trace_id, span_id, body`);
+  `TAIL_WINDOW_S` (default 300, 0 = no bound) — `AND <order> >= now - N s`,
+  computed on the box per query; `TAIL_QUERY_SERVICE` (unset = the api
+  pods that take the inserts) names another Service whose ready endpoints
+  take the queries — the dedicated query pods, once they exist;
+  `TAIL_SLEEP_S` (0) think time between queries; `TAIL_DRAIN_WAIT_S` (600).
 - **explain**: every bench's `"explain": "analyze"` call has its own
   `EXPLAIN_TIMEOUT_MS` (default 120,000). A lost explain response used to
   cost the whole query timeout.
@@ -535,6 +549,38 @@ filter never prunes** — only the `project` predicate can, and the plan says
 whether it did. A `VARIANT` column is JSON text on disk, parsed per scanned
 row, so the unscoped scan cases are where it pays.
 
+### The tail query under ingest
+
+`mise run bench-tail` is the shape of the product's day: rows stream in
+while several projects ask for their last 100 events. `k6/tail.js` runs
+one VU per project in a closed loop against the api pods, each iteration
+alternating `options.distributed` true and false:
+
+```sql
+SELECT timestamp, trace_id, span_id, body
+FROM bench.clickstack_map_v2
+WHERE project = 'proj_0617' AND inserted_at >= TIMESTAMP '<now - TAIL_WINDOW_S>'
+ORDER BY inserted_at DESC LIMIT 100
+```
+
+`TAIL_COLUMNS` picks the projection and `TAIL_WINDOW_S` (default 300) the
+time bound, computed on the box per query; `TAIL_WINDOW_S=0` drops the
+bound. The first run (2026-08-27) selected six columns including the
+attribute map and had no bound — see the write-up for what each change
+bought.
+
+Three phases, `TAIL_DURATION_S` each: `tail-idle` with no ingest, one
+`tail-ingest-vus<N>` per value in `TAIL_INGEST_VUS` (the insert k6 runs
+its warm-up, then the tail k6 is detached on the box while the measured
+insert runs), and `tail-sealed` after the hot tier drains. Each phase
+writes wall and `durationMs` percentiles per mode, rows returned, shards,
+hot files seen, and errors. Read wall p50 and p99 per mode per phase, and
+whether every query returned `TAIL_LIMIT` rows.
+
+```sh
+SHAPE=clickstack TABLE=clickstack_map_v2 TAIL_INGEST_VUS="8 32" TAIL_DURATION_S=90 LABEL_SUFFIX=-tail mise run bench-tail
+```
+
 `mise run bench-onebrc-ingest` answers a third question: **at what
 concurrency does the upload stop scaling?** It runs the same upload once per
 value in `ONEBRC_WORKERS`, each into its own `<TABLE>_w<N>` table, with no
@@ -550,6 +596,7 @@ The instance is not Terraform-managed. It is found by tag
 ## Layout
 
 ```
+k6/tail.js            the last-100-events query loop, one VU per project, distributed alternating
 tools/genbody/        deterministic OTel NDJSON generator: 63 flat columns, kv, or the ClickStack layout
 tools/gen1brc/        the 1BRC measurements file generator, 413 stations, seeded
 tools/upload1brc/     streams a measurements file as idempotent NDJSON inserts
@@ -686,6 +733,18 @@ filter in 2.8 s, flat columns in 1.5 s. Ingest at 32 VUs: variant 148k
 rows/s, flat 132k, map 102k (the map re-encodes every row). Clustering by
 `project` prunes row groups, never files
 ([results/2026-08-27-clickstack-map-vs-variant.md](results/2026-08-27-clickstack-map-vs-variant.md)).
+
+The tail query, 2026-08-27: **the last 100 events for one project in
+0.61 s idle and 0.68–0.72 s p50 while 32 VUs push 90k rows/s** into the
+same map table, on the dedicated query pods with `SMOLQUERY_WARM_ENGINES=4`,
+a four-column projection and a 5-minute window; four projects back to back
+1.3 s idle and 1.7–1.9 s under ingest (p95 3.9–4.3 s). The morning's
+baseline on the api pods with the wide query was 1.59 s / 2.97 s for one
+project and 3.2 s / 5.1–5.4 s for four. `distributed` is a no-op
+(`ORDER BY … LIMIT` never scatters). What remains under ingest is the
+hot-tier fetch, ~300 segment requests per query (T-400); what remains at
+four queriers is the per-job path itself, 1.16 s on an empty window
+([results/2026-08-27-tail-under-ingest.md](results/2026-08-27-tail-under-ingest.md)).
 
 load-rig, on an M1 Pro with 10 cores and 16 GB: smolquery peaked at **383,157
 rows/s** (32 VU, pool=4, enc=4), ClickHouse at **165,814 rows/s** with matching

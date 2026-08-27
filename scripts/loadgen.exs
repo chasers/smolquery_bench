@@ -167,12 +167,12 @@ defmodule Bench.Loadgen do
 
   @ipv4 ~r/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/
 
-  defp endpoint_ips do
+  defp endpoint_ips(service \\ "smolquery-api") do
     args = [
       "get",
       "endpointslices",
       "-l",
-      "kubernetes.io/service-name=smolquery-api",
+      "kubernetes.io/service-name=#{service}",
       "-o",
       "jsonpath={range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{\" \"}{end}"
     ]
@@ -522,7 +522,7 @@ defmodule Bench.Loadgen do
   def sweep do
     benches = Bench.benches()
     ingest? = "ingest" in benches
-    box? = ingest? or "onebrc" in benches
+    box? = ingest? or "onebrc" in benches or "tail" in benches
 
     pod_ips = api_pod_ips()
     dataset = Bench.Remote.dataset()
@@ -553,6 +553,7 @@ defmodule Bench.Loadgen do
       case bench do
         "ingest" -> run_ingest(id, dataset, table, urls, key, watcher)
         "attrs" -> run_attrs(dataset, table, key, watcher)
+        "tail" -> run_tail(id, dataset, table, key, watcher)
         "pruning" -> run_pruning(dataset, table, key)
         "compaction" -> run_compaction()
         "onebrc" -> run_onebrc(id, dataset, table, key, watcher)
@@ -692,6 +693,211 @@ defmodule Bench.Loadgen do
 
   defp drain_outcome(%{waited_s: waited_s, hot_files: hot_files}),
     do: "NOT drained after #{waited_s}s (#{inspect(hot_files)} hot files) — continuing"
+
+  # ── bench: tail ────────────────────────────────────────────────────────────
+
+  defp tail_vus, do: Bench.env_int("TAIL_VUS", 4)
+
+  defp tail_projects do
+    "TAIL_PROJECTS"
+    |> Bench.env("proj_0617,proj_0589,proj_0878,proj_0809")
+    |> String.split(",", trim: true)
+    |> Enum.map(&String.trim/1)
+  end
+
+  defp tail_duration_s, do: Bench.env_int("TAIL_DURATION_S", 60)
+
+  defp tail_ingest_vus, do: "TAIL_INGEST_VUS" |> Bench.env("32") |> String.split()
+
+  defp tail_limit, do: Bench.env_int("TAIL_LIMIT", 100)
+
+  defp tail_order, do: Bench.env("TAIL_ORDER", "inserted_at")
+
+  defp tail_sleep_s, do: Bench.env("TAIL_SLEEP_S", "0")
+
+  defp tail_columns, do: Bench.env("TAIL_COLUMNS", "timestamp, trace_id, span_id, body")
+
+  defp tail_window_s, do: Bench.env_int("TAIL_WINDOW_S", 300)
+
+  defp tail_query_ips(pod_ips) do
+    case Bench.env("TAIL_QUERY_SERVICE", "") do
+      "" -> pod_ips
+      service -> endpoint_ips(service)
+    end
+  end
+
+  defp tail_drain_wait_s, do: Bench.env_int("TAIL_DRAIN_WAIT_S", 600)
+
+  defp run_tail(id, dataset, table, key, watcher) do
+    IO.puts("\n== tail: pushing the working tree, rebuilding the body")
+    push_code(id)
+    build_body(id)
+    Bench.Remote.setup()
+    put_api_key(key)
+    run!(id, "rm -f #{remote_dir()}/results/*.json")
+
+    ref = "#{dataset}.#{table}"
+    pod_ips = api_pod_ips()
+    query_ips = tail_query_ips(pod_ips)
+    query_urls = Enum.map_join(query_ips, ",", &"http://#{&1}:4000/v1/queries")
+
+    insert_urls =
+      Enum.map_join(pod_ips, ",", fn ip ->
+        "http://#{ip}:4000/v1/datasets/#{dataset}/tables/#{table}/insert"
+      end)
+
+    IO.puts(
+      "== tail: #{ref}, #{tail_vus()} tail VU(s) over #{Enum.join(tail_projects(), ", ")}, " <>
+        "queries to #{length(query_ips)} pod(s) of #{Bench.env("TAIL_QUERY_SERVICE", "smolquery-api")}, " <>
+        "last #{tail_limit()} by #{tail_order()} within #{tail_window_s()}s, " <>
+        "columns #{tail_columns()}, #{tail_duration_s()}s per phase, " <>
+        "ingest at #{Enum.join(tail_ingest_vus(), " ")} VU(s)"
+    )
+
+    idle = tail_phase(id, watcher, "tail-idle", query_urls, ref, nil)
+
+    ingest_phases =
+      Enum.map(tail_ingest_vus(), fn vus ->
+        Bench.WatchMetrics.set_phase(watcher, "tail-drain-vus#{vus}")
+        drain = await_hot_drain(dataset, table, key, tail_drain_wait_s())
+        IO.puts("== tail: hot tier #{drain_outcome(drain)}")
+
+        tail_phase(
+          id,
+          watcher,
+          "tail-ingest-vus#{vus}",
+          query_urls,
+          ref,
+          {insert_urls, vus, drain}
+        )
+      end)
+
+    Bench.WatchMetrics.set_phase(watcher, "tail-drain")
+    drain = await_hot_drain(dataset, table, key, tail_drain_wait_s())
+    IO.puts("== tail: hot tier #{drain_outcome(drain)}")
+    sealed = tail_phase(id, watcher, "tail-sealed", query_urls, ref, nil)
+
+    delete_api_key()
+    fetch()
+
+    label = "loadgen-tail#{label_suffix()}"
+
+    payload = %{
+      "inserted_at" => now_iso(),
+      "table" => ref,
+      "tail_vus" => tail_vus(),
+      "projects" => tail_projects(),
+      "limit" => tail_limit(),
+      "order_column" => tail_order(),
+      "columns" => tail_columns(),
+      "window_s" => tail_window_s(),
+      "phases" => [idle] ++ ingest_phases ++ [sealed]
+    }
+
+    File.write!(Path.join(results_dir(), "#{label}.tail.json"), JSON.encode!(payload) <> "\n")
+    IO.puts("== tail → #{label}.tail.json")
+  end
+
+  defp tail_phase(id, watcher, phase, query_urls, ref, ingest) do
+    Bench.WatchMetrics.set_phase(watcher, phase)
+    tail_label = "loadgen-#{phase}#{label_suffix()}"
+    tail_out = "results/#{tail_label}.tail.json"
+
+    case ingest do
+      nil ->
+        IO.puts("== #{phase}: #{tail_duration_s()}s of tail queries, no ingest")
+        out = run!(id, tail_script(query_urls, ref, tail_duration_s(), tail_out, false))
+        IO.puts(String.trim(out))
+        %{"phase" => phase, "tail_file" => "#{tail_label}.tail.json", "insert_file" => nil}
+
+      {insert_urls, vus, drain} ->
+        insert_label = "loadgen-tail-vus#{vus}#{label_suffix()}"
+        IO.puts("== #{phase}: warm-up #{warmup_s()}s at #{vus} VUs")
+        run!(id, warmup_script(insert_urls, vus))
+        Process.sleep(pause_s() * 1000)
+
+        IO.puts(
+          "== #{phase}: tail queries detached, then #{tail_duration_s()}s measured ingest at #{vus} VUs"
+        )
+
+        pid =
+          run!(id, tail_script(query_urls, ref, tail_duration_s() + pause_s(), tail_out, true))
+          |> String.trim()
+
+        pods_task = Task.async(fn -> Bench.WatchPods.sample(tail_duration_s()) end)
+        out = run!(id, tail_measure_script(insert_urls, vus, insert_label))
+        IO.puts(String.trim(out))
+        pods = pods_task |> Task.await(:infinity) |> Map.put("drain_wait_s", drain.waited_s)
+
+        File.write!(
+          Path.join(results_dir(), "#{insert_label}.pods.json"),
+          JSON.encode!(pods) <> "\n"
+        )
+
+        tail_out_text = tail_wait(id, pid, "logs/#{tail_label}.tail.log")
+        IO.puts(String.trim(tail_out_text))
+
+        %{
+          "phase" => phase,
+          "ingest_vus" => vus,
+          "tail_file" => "#{tail_label}.tail.json",
+          "insert_file" => "#{insert_label}.k6.json"
+        }
+    end
+  end
+
+  defp tail_wait(id, pid, log) do
+    out =
+      run!(id, """
+      cd #{remote_dir()}
+      for i in $(seq 1 60); do kill -0 #{pid} 2>/dev/null || break; sleep 2; done
+      cat #{log} 2>/dev/null || true
+      """)
+
+    out
+  end
+
+  defp tail_script(query_urls, ref, duration_s, out_file, detached?) do
+    command =
+      "k6 run --quiet -e URLS=\"#{query_urls}\" -e AUTH=\"$AUTH\" -e TABLE=#{ref} " <>
+        "-e PROJECTS=\"#{Enum.join(tail_projects(), ",")}\" -e VUS=#{tail_vus()} " <>
+        "-e DURATION=#{duration_s}s -e LIMIT=#{tail_limit()} -e ORDER_COLUMN=#{tail_order()} " <>
+        "-e SLEEP_S=#{tail_sleep_s()} -e COLUMNS=\"#{tail_columns()}\" -e WINDOW_S=#{tail_window_s()} " <>
+        "-e JSON_OUT=#{out_file} k6/tail.js"
+
+    if detached? do
+      log = String.replace(out_file, "results/", "logs/") |> String.replace(".json", ".log")
+
+      """
+      set -euo pipefail
+      cd #{remote_dir()}
+      mkdir -p logs
+      #{fetch_auth()}
+      export AUTH
+      setsid nohup sh -c '#{command}' > #{log} 2>&1 < /dev/null &
+      echo $!
+      """
+    else
+      """
+      set -euo pipefail
+      cd #{remote_dir()}
+      #{fetch_auth()}
+      #{command}
+      """
+    end
+  end
+
+  defp tail_measure_script(urls, vus, label) do
+    """
+    set -euo pipefail
+    cd #{remote_dir()}
+    #{fetch_auth()}
+    k6 run --quiet -e URLS='#{urls}' -e AUTH="$AUTH" -e ROWS=#{rows()} \
+      -e BODY=#{remote_dir()}/#{body_file()} \
+      -e VUS=#{vus} -e DURATION=#{tail_duration_s()}s \
+      -e JSON_OUT=results/#{label}.k6.json k6/insert.js
+    """
+  end
 
   # ── bench: attrs ───────────────────────────────────────────────────────────
 
