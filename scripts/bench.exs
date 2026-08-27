@@ -262,6 +262,7 @@ defmodule Bench.Genbody do
     projects = Bench.env("PROJECTS", "1000")
     seed = Bench.env("SEED", "42")
     base_date = Bench.env("BASE_DATE", "")
+    days = Bench.env("DAYS", "0")
     shape = Bench.shape()
 
     args =
@@ -278,7 +279,9 @@ defmodule Bench.Genbody do
         seed,
         "-out",
         Path.join(out_dir, Bench.body_name(shape, rows))
-      ] ++ if base_date == "", do: [], else: ["-base-date", base_date]
+      ] ++
+        if(base_date == "", do: [], else: ["-base-date", base_date]) ++
+        if(days == "0", do: [], else: ["-days", days])
 
     Bench.stream!("go", args, cd: Bench.root())
   end
@@ -558,6 +561,20 @@ defmodule Bench.Remote do
       ~s({"clustering":#{Bench.clustering(table)}}),
       "set clustering"
     )
+
+    case Bench.env("PARTITIONS", "") do
+      "" ->
+        :ok
+
+      count ->
+        ensure(
+          :patch,
+          "/v1/datasets/#{dataset()}/tables/#{table}",
+          headers,
+          ~s({"partitions":#{count}}),
+          "set partitions"
+        )
+    end
 
     IO.puts("remote ready: #{insert_url(table)}")
   end

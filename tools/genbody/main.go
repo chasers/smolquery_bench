@@ -86,6 +86,8 @@ type row struct {
 // other timestamp columns use — both default parsers reject a trailing Z.
 const insertedAtPlaceholder = "____INSERTED_AT___________"
 
+var spreadDays int
+
 type kvRow struct {
 	Key        string `json:"key"`
 	Timestamp  string `json:"timestamp"`
@@ -280,6 +282,9 @@ func resolveBase(date string) (time.Time, error) {
 
 func generate(r *rand.Rand, base time.Time, i, projects int) row {
 	ts := base.Add(time.Duration(i) * 317 * time.Microsecond)
+	if spreadDays > 0 {
+		ts = ts.Add(-time.Duration(r.Int63n(int64(spreadDays) * 24 * int64(time.Hour))))
+	}
 	service := pick(r, services)
 	routeIdx := r.Intn(len(routes))
 	route := routes[routeIdx]
@@ -411,8 +416,10 @@ func main() {
 	seed := flag.Int64("seed", 42, "PRNG seed for reproducible bodies")
 	out := flag.String("out", "", "output file path (required)")
 	baseDate := flag.String("base-date", "", "timestamp date as YYYY-MM-DD (default: today UTC)")
+	days := flag.Int("days", 0, "spread each row's timestamp uniformly over the last N days (0 = one day, ordered)")
 	shape := flag.String("shape", "otel", "row shape: otel (63 columns), kv (key, timestamp, value), or clickstack (ClickStack logs layout with attribute maps)")
 	flag.Parse()
+	spreadDays = *days
 
 	if *out == "" {
 		log.Fatal("-out is required")
