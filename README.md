@@ -756,7 +756,11 @@ p99 down 20–28%, p50 up 0.1–0.5 s, the buffer pods' bill per query down
 `SMOLQUERY_TOP_N_PROBE_ROWS` of 1,000,000. At 100,000 the probe opens a
 quarter of that and one querier's p95 drops to 1.21 s, but the median stays
 0.1 s (one querier) to 0.4 s (four) above pre-T-400: the probe's two engine
-round trips, not its breadth, are the cost (T-403)
+round trips, not its breadth, are the cost (T-403). A 1 s flush window
+(`FLUSH_IDLE_INTERVAL_MS` 300 → 1000) gave the best under-ingest tail yet —
+one querier 0.69 / 1.1 / 1.2 s p50 / p95 / p99 — but not from bigger commits
+(the 94 MB cap binds at ~10 bodies); the closed loop slowed 24% on a +0.5 s
+ack, and the hot tier shrank with it
 ([results/2026-08-27-tail-under-ingest.md](results/2026-08-27-tail-under-ingest.md)).
 
 The pathological table, 2026-08-27: `partitions: 64` and 30 days of
