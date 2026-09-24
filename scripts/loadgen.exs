@@ -401,7 +401,7 @@ defmodule Bench.Loadgen do
   defp push_code(id) do
     tarball = Path.join(System.tmp_dir!(), "bench-code.tgz")
 
-    Bench.sh!("tar", ["czf", tarball, "k6", "tools", "go.mod", "schemas"],
+    Bench.sh!("tar", ["czf", tarball, "k6", "tools", "go.mod", "go.sum", "schemas"],
       cd: Bench.root(),
       env: [{"COPYFILE_DISABLE", "1"}]
     )
@@ -529,7 +529,7 @@ defmodule Bench.Loadgen do
   def sweep do
     benches = Bench.benches()
     ingest? = "ingest" in benches
-    box? = ingest? or "onebrc" in benches or "tail" in benches
+    box? = ingest? or "onebrc" in benches or "tail" in benches or "tsbs" in benches
 
     pod_ips = api_pod_ips()
     dataset = Bench.Remote.dataset()
@@ -564,6 +564,7 @@ defmodule Bench.Loadgen do
         "pruning" -> run_pruning(dataset, table, key)
         "compaction" -> run_compaction()
         "onebrc" -> run_onebrc(id, dataset, table, key, watcher)
+        "tsbs" -> run_tsbs(id, key, watcher)
       end
     end)
 
@@ -1774,6 +1775,432 @@ defmodule Bench.Loadgen do
       -e VUS=#{vus} -e DURATION=#{duration_s()}s \
       -e JSON_OUT=results/#{label}.k6.json k6/insert.js
     """
+  end
+
+  # ── bench: tsbs ────────────────────────────────────────────────────────────
+
+  @tsbs_query_types ~w(
+    single-groupby-1-1-1 single-groupby-1-1-12 single-groupby-1-8-1
+    single-groupby-5-1-1 single-groupby-5-1-12 single-groupby-5-8-1
+    cpu-max-all-1 cpu-max-all-8
+    double-groupby-1 double-groupby-5 double-groupby-all
+  )
+
+  defp tsbs_scales, do: Bench.env("TSBS_SCALES", "100 1000") |> String.split()
+  defp tsbs_hours, do: Bench.env_int("TSBS_HOURS", 24)
+  defp tsbs_phases, do: Bench.env("TSBS_PHASES", "load,query") |> String.split(",", trim: true)
+  defp tsbs_ref, do: Bench.env("TSBS_REF", "8323e59")
+  defp tsbs_seed, do: Bench.env_int("TSBS_SEED", 123)
+  defp tsbs_queries, do: Bench.env_int("TSBS_QUERIES", 50)
+  defp tsbs_verify, do: Bench.env_int("TSBS_VERIFY", 3)
+  defp tsbs_query_workers, do: Bench.env("TSBS_QUERY_WORKERS", "1 4") |> String.split()
+
+  defp tsbs_query_types,
+    do: Bench.env("TSBS_QUERY_TYPES", Enum.join(@tsbs_query_types, " ")) |> String.split()
+
+  defp tsbs_load_workers, do: Bench.env_int("TSBS_LOAD_WORKERS", 8)
+  defp tsbs_load_samples, do: Bench.env_int("TSBS_LOAD_SAMPLES", 10_000)
+  defp tsbs_drain_wait_s, do: Bench.env_int("TSBS_DRAIN_WAIT_S", 1800)
+  defp tsbs_drain_slack, do: Bench.env_int("TSBS_DRAIN_SLACK", 8)
+  defp tsbs_poll_s, do: Bench.env_int("TSBS_POLL_S", 20)
+
+  defp tsbs_results_dir,
+    do: Bench.env("TSBS_RESULTS", Path.join(Bench.root(), "results/raw-tsbs"))
+
+  defp tsbs_windows_file, do: Path.join(tsbs_results_dir(), "windows.json")
+  defp tsbs_home, do: "#{remote_dir()}/tsbs"
+
+  defp tsbs_gen_dir(scale, w),
+    do: "#{tsbs_home()}/gen/s#{scale}-#{String.slice(w["start"], 0, 13)}"
+
+  defp tsbs_out_dir(scale, label), do: "#{tsbs_home()}/out/s#{scale}-#{label}"
+  defp tsbs_sql, do: "SELECT count(*) AS n FROM metrics.samples WHERE name = '~'"
+
+  defp tsbs_label do
+    case Bench.env("TSBS_LABEL", "") do
+      "" -> "sq-" <> String.slice(live_sha(), 0, 7)
+      label -> label
+    end
+  end
+
+  defp live_sha do
+    case Bench.Kube.cmd([
+           "exec",
+           "smolquery-query-0",
+           "-c",
+           "smolquery",
+           "--",
+           "printenv",
+           "SMOLQUERY_GIT_SHA"
+         ]) do
+      {sha, 0} -> String.trim(sha)
+      _ -> "unknown"
+    end
+  end
+
+  defp tsbs_windows do
+    case File.read(tsbs_windows_file()) do
+      {:ok, body} -> JSON.decode!(body)
+      _ -> %{}
+    end
+  end
+
+  defp tsbs_window(scale) do
+    windows = tsbs_windows()
+
+    case windows[scale] do
+      nil ->
+        finish =
+          case Map.values(windows) do
+            [] ->
+              %{DateTime.utc_now() | hour: 0, minute: 0, second: 0, microsecond: {0, 0}}
+
+            taken ->
+              taken
+              |> Enum.map(&elem(DateTime.from_iso8601(&1["start"]), 1))
+              |> Enum.min(DateTime)
+          end
+
+        start = DateTime.add(finish, -tsbs_hours() * 3600, :second)
+        w = %{"start" => DateTime.to_iso8601(start), "end" => DateTime.to_iso8601(finish)}
+        File.mkdir_p!(tsbs_results_dir())
+        File.write!(tsbs_windows_file(), JSON.encode!(Map.put(windows, scale, w)))
+        w
+
+      w ->
+        w
+    end
+  end
+
+  defp run_tsbs(id, key, watcher) do
+    label = tsbs_label()
+    File.mkdir_p!(tsbs_results_dir())
+
+    IO.puts(
+      "\n== tsbs: #{label}, scales #{Enum.join(tsbs_scales(), " ")}, phases #{Enum.join(tsbs_phases(), ",")}"
+    )
+
+    IO.puts(
+      "== tsbs: pushing the working tree, building TSBS #{tsbs_ref()}, tsbsrw and tsbsdigest"
+    )
+
+    push_code(id)
+
+    run!(id, """
+    set -euo pipefail
+    cd #{remote_dir()}
+    export PATH=/usr/local/go/bin:$PATH GOPATH=/opt/go GOCACHE=/opt/go/cache GOBIN=#{tsbs_home()}/bin
+    mkdir -p #{tsbs_home()}/bin
+    for c in tsbs_generate_data tsbs_generate_queries tsbs_run_queries_victoriametrics; do
+      [ -x #{tsbs_home()}/bin/$c ] || go install github.com/timescale/tsbs/cmd/$c@#{tsbs_ref()}
+    done
+    go build -o #{tsbs_home()}/bin/tsbsrw ./tools/tsbsrw
+    go build -o #{tsbs_home()}/bin/tsbsdigest ./tools/tsbsdigest
+    ls #{tsbs_home()}/bin
+    """)
+
+    put_api_key(key)
+
+    for scale <- tsbs_scales() do
+      w = tsbs_window(scale)
+      IO.puts("\n== tsbs s#{scale}: #{w["start"]} to #{w["end"]}")
+      Bench.WatchMetrics.set_phase(watcher, "tsbs-s#{scale}-gen")
+      IO.puts(tsbs_gen(id, scale, w))
+
+      if "load" in tsbs_phases() do
+        Bench.WatchMetrics.set_phase(watcher, "tsbs-s#{scale}-load")
+        tsbs_load(id, scale, w, label, key, watcher)
+      end
+
+      if "query" in tsbs_phases() do
+        Bench.WatchMetrics.set_phase(watcher, "tsbs-s#{scale}-query")
+        tsbs_query(id, scale, w, label)
+      end
+
+      tsbs_fetch(id, scale, label)
+    end
+
+    delete_api_key()
+  end
+
+  defp tsbs_gen(id, scale, w) do
+    dir = tsbs_gen_dir(scale, w)
+
+    common =
+      "--use-case=cpu-only --seed=#{tsbs_seed()} --scale=#{scale} --timestamp-start=#{w["start"]} --timestamp-end=#{w["end"]}"
+
+    queries =
+      Enum.map_join(@tsbs_query_types, "\n", fn type ->
+        "[ -f #{dir}/#{type}.q ] || bin/tsbs_generate_queries #{common} --format=victoriametrics " <>
+          "--query-type=#{type} --queries=#{tsbs_queries()} --file=#{dir}/#{type}.q"
+      end)
+
+    run!(id, """
+    set -euo pipefail
+    cd #{tsbs_home()}
+    mkdir -p #{dir}
+    if [ ! -f #{dir}/cpu-only.lp ]; then
+      bin/tsbs_generate_data #{common} --log-interval=10s --format=victoriametrics --file=#{dir}/cpu-only.lp.tmp
+      mv #{dir}/cpu-only.lp.tmp #{dir}/cpu-only.lp
+    fi
+    #{queries}
+    echo "#{dir}: $(du -h #{dir}/cpu-only.lp | cut -f1) data, $(wc -l < #{dir}/cpu-only.lp) lines"
+    """)
+    |> String.trim()
+  end
+
+  defp tsbs_load(id, scale, w, label, key, watcher) do
+    url = "#{Bench.Remote.base_url()}/v1/queries"
+    baseline = hot_files(url, key, tsbs_sql())
+    out = tsbs_out_dir(scale, label)
+    urls = Enum.map_join(api_pod_ips(), ",", &"http://#{&1}:8428/api/v1/write")
+
+    IO.puts(
+      "== tsbs s#{scale}: hot files before the load #{inspect(baseline)}, #{tsbs_load_workers()} writers across #{length(api_pod_ips())} api pod(s)"
+    )
+
+    pid =
+      run!(id, """
+      set -euo pipefail
+      cd #{tsbs_home()}
+      #{fetch_auth()}
+      export AUTH
+      mkdir -p #{out}
+      rm -f #{out}/load.json #{out}/load.progress.json
+      setsid nohup bin/tsbsrw -file=#{tsbs_gen_dir(scale, w)}/cpu-only.lp -urls='#{urls}' \\
+        -workers=#{tsbs_load_workers()} -samples=#{tsbs_load_samples()} \\
+        -progress=#{out}/load.progress.json -out=#{out}/load.json \\
+        > #{out}/load.log 2>&1 < /dev/null &
+      echo $!
+      """)
+      |> String.trim()
+
+    summary = tsbs_poll_load(id, pid, out)
+
+    IO.puts(
+      "== tsbs s#{scale}: #{summary["samples_accepted"]} samples in #{round(summary["duration_s"])} s, " <>
+        "#{round(summary["samples_per_s"])}/s, p50 #{round(summary["latency_ms"]["med"])} ms, " <>
+        "#{summary["retries_busy"]} busy retries, #{summary["retries_other"]} other, " <>
+        "#{summary["samples_rejected"]} rejected, #{summary["samples_failed"]} failed"
+    )
+
+    Bench.WatchMetrics.set_phase(watcher, "tsbs-s#{scale}-drain")
+    target = if is_integer(baseline), do: baseline + tsbs_drain_slack(), else: tsbs_drain_slack()
+    drain = tsbs_drain(url, key, target, System.monotonic_time(:second))
+
+    IO.puts(
+      "== tsbs s#{scale}: hot files #{inspect(drain.hot_files)} after #{drain.waited_s} s (target ≤ #{target})"
+    )
+
+    payload =
+      Map.merge(summary, %{
+        "inserted_at" => now_iso(),
+        "build" => live_sha(),
+        "window" => w,
+        "api_pods" => length(api_pod_ips()),
+        "hot_files_before" => baseline,
+        "drain_s" => drain.waited_s,
+        "hot_files_after_drain" => drain.hot_files
+      })
+
+    File.write!(
+      Path.join(tsbs_results_dir(), "s#{scale}-#{label}.load.json"),
+      JSON.encode!(payload) <> "\n"
+    )
+  end
+
+  defp tsbs_poll_load(id, pid, out) do
+    Process.sleep(tsbs_poll_s() * 1000)
+
+    [state | rest] =
+      run!(id, """
+      if kill -0 #{pid} 2>/dev/null; then echo running; else echo done; fi
+      cat #{out}/load.progress.json 2>/dev/null || echo '{}'
+      """)
+      |> String.trim()
+      |> String.split("\n", parts: 2)
+
+    snap = rest |> List.first("{}") |> JSON.decode!()
+
+    if map_size(snap) > 0 do
+      IO.puts(
+        "   #{snap["samples_accepted"]} samples, #{round(snap["samples_per_s_recent"] || 0)}/s recent, " <>
+          "#{snap["retries_busy"]} busy retries, #{snap["retries_other"]} other, responses #{inspect(snap["responses"])}"
+      )
+    end
+
+    case state do
+      "running" ->
+        tsbs_poll_load(id, pid, out)
+
+      _ ->
+        case run!(id, "cat #{out}/load.json 2>/dev/null || true") |> String.trim() do
+          "" ->
+            Bench.fatal!(
+              "tsbsrw exited without a summary:\n" <> run!(id, "tail -20 #{out}/load.log")
+            )
+
+          json ->
+            JSON.decode!(json)
+        end
+    end
+  end
+
+  defp tsbs_drain(url, key, target, started) do
+    files = hot_files(url, key, tsbs_sql())
+    waited = System.monotonic_time(:second) - started
+
+    cond do
+      is_integer(files) and files <= target ->
+        %{waited_s: waited, hot_files: files}
+
+      waited >= tsbs_drain_wait_s() ->
+        %{waited_s: waited, hot_files: files}
+
+      true ->
+        IO.puts("   #{waited} s: #{inspect(files)} hot files")
+        Process.sleep(drain_poll_s() * 1000)
+        tsbs_drain(url, key, target, started)
+    end
+  end
+
+  defp tsbs_query(id, scale, w, label) do
+    dir = tsbs_gen_dir(scale, w)
+    out = tsbs_out_dir(scale, label)
+    urls = Enum.map_join(endpoint_ips("smolquery-query"), ",", &"http://tsbs:${KEY}@#{&1}:8428")
+    runner = "bin/tsbs_run_queries_victoriametrics"
+
+    steps =
+      Enum.map_join(tsbs_query_types(), "\n", fn type ->
+        passes =
+          Enum.map_join(tsbs_query_workers(), "\n", fn workers ->
+            """
+            rm -f #{out}/#{type}.w#{workers}.json
+            #{runner} --file=#{dir}/#{type}.q --urls="#{urls}" --workers=#{workers} --print-interval=0 \\
+              --results-file=#{out}/#{type}.w#{workers}.json > #{out}/#{type}.w#{workers}.full.log 2>&1
+            echo "exit $?" >> #{out}/#{type}.w#{workers}.full.log
+            tail -c 3000 #{out}/#{type}.w#{workers}.full.log > #{out}/#{type}.w#{workers}.log
+            rm -f #{out}/#{type}.w#{workers}.full.log
+            """
+          end)
+
+        """
+        echo "$(date -u +%H:%M:%S) #{type}" >> #{out}/query.progress
+        #{runner} --file=#{dir}/#{type}.q --urls="#{urls}" --workers=1 --max-queries=#{tsbs_verify()} \\
+          --print-interval=0 --print-responses 2>&1 | bin/tsbsdigest > #{out}/#{type}.digest
+        #{passes}
+        """
+      end)
+
+    script = """
+    #!/bin/bash
+    set -uo pipefail
+    cd #{tsbs_home()}
+    #{fetch_auth()}
+    KEY="${AUTH#Bearer }"
+    #{steps}
+    touch #{out}/query.done
+    """
+
+    payload = Base.encode64(script)
+
+    pid =
+      run!(id, """
+      set -euo pipefail
+      mkdir -p #{out}
+      rm -f #{out}/query.done #{out}/query.progress
+      echo '#{payload}' | base64 -d > #{out}/query.sh
+      setsid nohup bash #{out}/query.sh > #{out}/query.log 2>&1 < /dev/null &
+      echo $!
+      """)
+      |> String.trim()
+
+    IO.puts(
+      "== tsbs s#{scale}: queries running as pid #{pid} across #{length(endpoint_ips("smolquery-query"))} query pod(s)"
+    )
+
+    tsbs_poll_query(id, pid, out)
+  end
+
+  defp tsbs_poll_query(id, pid, out) do
+    Process.sleep(tsbs_poll_s() * 1000)
+
+    status =
+      run!(id, """
+      if [ -f #{out}/query.done ]; then echo done; elif kill -0 #{pid} 2>/dev/null; then echo running; else echo died; fi
+      tail -1 #{out}/query.progress 2>/dev/null || true
+      """)
+      |> String.trim()
+
+    case String.split(status, "\n", parts: 2) do
+      ["running" | rest] ->
+        IO.puts("   at #{List.first(rest, "?")}")
+        tsbs_poll_query(id, pid, out)
+
+      ["done" | _] ->
+        :ok
+
+      _ ->
+        IO.puts("== tsbs: the query script died:\n" <> run!(id, "tail -20 #{out}/query.log"))
+    end
+  end
+
+  defp tsbs_fetch(id, scale, label) do
+    out = tsbs_out_dir(scale, label)
+    local = tsbs_results_dir()
+
+    payload =
+      fetch_chunked(
+        id,
+        "cd #{out} && tar czf - --exclude='*.lp' --exclude=query.sh --exclude=load.progress.json --exclude=load.json . | base64 -w0"
+      )
+
+    tmp = Path.join(System.tmp_dir!(), "tsbs-#{scale}-#{label}")
+    File.rm_rf!(tmp)
+    File.mkdir_p!(tmp)
+    tarball = Path.join(tmp, "out.tgz")
+    File.write!(tarball, Base.decode64!(payload))
+    Bench.sh!("tar", ["xzf", tarball, "-C", tmp])
+    File.rm!(tarball)
+
+    for file <- File.ls!(tmp) do
+      File.cp!(Path.join(tmp, file), Path.join(local, "s#{scale}-#{label}.#{file}"))
+    end
+
+    for type <- tsbs_query_types(), workers <- tsbs_query_workers() do
+      json = Path.join(local, "s#{scale}-#{label}.#{type}.w#{workers}.json")
+      log = Path.join(local, "s#{scale}-#{label}.#{type}.w#{workers}.log")
+
+      if not File.exists?(json) and File.exists?(log) do
+        error =
+          log
+          |> File.read!()
+          |> String.split("\n")
+          |> Enum.find("no output", &String.contains?(&1, ["panic:", "statuscode", "error"]))
+          |> String.slice(0, 400)
+
+        File.write!(json, JSON.encode!(%{"error" => error}))
+      end
+    end
+
+    File.rm_rf!(tmp)
+    IO.puts("== tsbs s#{scale}: results → #{local}/s#{scale}-#{label}.*")
+  end
+
+  defp fetch_chunked(id, producer) do
+    staged = "/tmp/tsbs-fetch.b64"
+
+    size =
+      run!(id, "#{producer} > #{staged} && stat -c %s #{staged}")
+      |> String.trim()
+      |> String.to_integer()
+
+    chunk = 20_000
+
+    0..max(div(size - 1, chunk), 0)//1
+    |> Enum.map_join(fn i ->
+      run!(id, "cut -c #{i * chunk + 1}-#{(i + 1) * chunk} #{staged}") |> String.trim()
+    end)
   end
 
   # ── fetch ──────────────────────────────────────────────────────────────────
