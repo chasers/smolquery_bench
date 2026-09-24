@@ -598,6 +598,93 @@ then 5xx, `rows_failed` and pod restarts, in that order.
 The instance is not Terraform-managed. It is found by tag
 `Name=smolquery-bench-loadgen`, and `mise run bench-down` terminates it.
 
+## The TSBS arm
+
+TSBS runs in two places. `mise run bench-tsbs` runs it against the deployed
+cluster from the load generator. `scripts/tsbs.exs` runs it against one node
+on the same machine. Both write `results/raw-tsbs/s<scale>-<label>.*`, and
+`mise run tsbs-report` reads both.
+
+### On the cluster
+
+The cluster serves the edge on port 8428: the api pods take remote write and
+the query pods answer MetricsQL. Every sample goes to `metrics.samples`, the
+table vmagent also writes. The edge has no table choice per request.
+
+```sh
+BASE_URL=https://<sandbox-host>:8443 TSBS_LABEL=before mise run bench-tsbs
+# after the next image rolls out: query the same data again
+BASE_URL=https://<sandbox-host>:8443 TSBS_LABEL=after TSBS_PHASES=query mise run bench-tsbs
+LABELS="before after" SCALE=1000 mise run tsbs-report
+```
+
+- The load runs once. The query phase runs once for each build. Both builds
+  then read the same rows, so their answers compare one to one.
+- Each scale gets its own window, one after the other, `TSBS_HOURS` (24) long
+  and ending at midnight UTC on the day of the first run.
+  `results/raw-tsbs/windows.json` keeps the windows, so a later run and a new
+  box generate the same queries. Scale 100 and scale 1,000 share host names,
+  so their windows must not overlap.
+- `tools/tsbsrw` writes round-robin to the api pod IPs. The query runner reads
+  round-robin from the query pod IPs.
+- The drain waits until the hot tier is back to its file count from before
+  the load, plus `TSBS_DRAIN_SLACK` (8). vmagent keeps writing, so the hot
+  tier is never empty.
+- `tools/tsbsdigest` hashes the first `TSBS_VERIFY` (3) answers of each query
+  type on the box. SSM returns about 24 KB for each call, and one scale 1,000
+  answer is megabytes.
+- Knobs: `TSBS_SCALES` (`100 1000`), `TSBS_PHASES` (`load,query`),
+  `TSBS_LABEL` (default `sq-<live sha>`), `TSBS_QUERIES` per type (50),
+  `TSBS_QUERY_WORKERS` (`1 4`), `TSBS_QUERY_TYPES`, `TSBS_LOAD_WORKERS` (8),
+  `TSBS_LOAD_SAMPLES` (10,000), `TSBS_DRAIN_WAIT_S` (1800), `TSBS_REF`.
+
+### On one node
+
+`scripts/tsbs.exs` runs the Time Series Benchmark Suite (TSBS) `cpu-only`
+workload against one smolquery node's VictoriaMetrics edge. It compares two
+or more smolquery builds on the same generated data. Run it on the machine
+that runs the node, the dev box. That machine needs Go, Elixir and a
+smolquery clone at `SQ_REPO` (default `~/smolquery`).
+
+The data goes in through the edge's remote write path. TSBS's own loaders do
+not fit. `tsbs_load_victoriametrics` sends Influx line protocol, which the
+edge does not take. `tsbs_load_prometheus` names a series by its field alone
+(`usage_user`), so no TSBS query matches it, and it panics on a 429.
+`tools/tsbsrw` reads the `victoriametrics` data file instead. It names each
+series `<measurement>_<field>` as VictoriaMetrics does. It retries a 429 or
+503 after its `retry-after`, as vmagent does.
+
+```sh
+mise run tsbs-setup                          # TSBS at TSBS_REF, tsbsrw, into ~/tsbs/bin
+mise run tsbs-build -- before origin/main    # prod build, worktree ~/tsbs/sq-before
+mise run tsbs-build -- after origin/t-586-whole-pushdown
+SCALE=100 mise exec -- elixir scripts/tsbs.exs gen
+SCALE=100 mise exec -- elixir scripts/tsbs.exs run before
+SCALE=100 mise exec -- elixir scripts/tsbs.exs run after
+SCALE=100 mise run tsbs-report
+```
+
+- `run` starts the build on an empty data directory and creates
+  `metrics.samples`. It loads the data file, then waits until the buffer
+  holds no unsealed entry (`DRAIN_TIMEOUT_S`, default 1800). It keeps the
+  first `VERIFY_QUERIES` answers of each query type, runs every type at each
+  of `QUERY_WORKERS` (default `1 4`), then stops the node.
+- Only 11 query types have a PromQL form in TSBS: `single-groupby-*`,
+  `cpu-max-all-*` and `double-groupby-*`. The others panic in the generator.
+- A query type whose answer is not a 200 stops at once, because TSBS panics
+  on it. The report shows the refusal, for example a 422 past
+  `SMOLQUERY_VICTORIAMETRICS_MAX_SAMPLES`.
+- `report` compares the kept answers across builds, to 1e-9.
+- Knobs: `SCALE` (100), `HOURS` (24, at least 13 for `double-groupby`),
+  `TS_END` (this hour), `QUERIES` per type (100), `LOAD_WORKERS` (8),
+  `LOAD_SAMPLES` per request (10,000), `LABELS` (`before after`), and
+  `API_PORT`, `HOT_PORT`, `METRICS_PORT`, `VM_PORT`.
+- The node runs `MIX_ENV=prod` with the cluster's seal and memory tuning. It
+  runs the roles api, ingest, buffer, storage, query and victoriametrics. Any
+  `SMOLQUERY_*` or `CATALOG_DATABASE_URL` in the shell passes through.
+- Keep ports 4000 to 4003 free. The storage and query roles reach the hot
+  tier on 4001 even when `HOT_PORT` moves the listener.
+
 ## Layout
 
 ```
@@ -605,16 +692,21 @@ k6/tail.js            the last-100-events query loop, one VU per project, distri
 tools/genbody/        deterministic OTel NDJSON generator: 63 flat columns, kv, or the ClickStack layout
 tools/gen1brc/        the 1BRC measurements file generator, 413 stations, seeded
 tools/upload1brc/     streams a measurements file as idempotent NDJSON inserts
+tools/tsbsrw/         loads a TSBS line-protocol file through Prometheus remote write
+tools/tsbsdigest/     one hash per TSBS answer, to compare builds without moving the JSON
 tools/watch/          CPU and RSS sampler, ps-based, for the server and k6
 k6/insert.js          load script, closed loop (VUS) or open loop (RATE)
 schemas/              smolquery table-create JSON, ClickHouse MergeTree DDL
+schemas/onebrc_stations.sql  the 413 stations and means, generated from tools/gen1brc
 scripts/              setup, run, sweep, stop, report, watch-pods, watch-metrics, loadgen
+scripts/tsbs.exs      TSBS cpu-only against the VictoriaMetrics edge, per smolquery build
 scripts/report_html.exs  the HTML run report generator
 scripts/report/       its CSS and JS, inlined into every report
 mise.toml             every workflow as a task — `mise tasks`
 results/raw/          k6 and watch JSON per run (gitignored)
 results/raw-remote*/  the same, plus *.pods.json, for the remote arm
 results/raw-loadgen/  the in-region load generator's runs, plus *.metrics.sqlite3 per sweep
+results/raw-tsbs/     the TSBS load and query runs (gitignored)
 results/*.md          dated baseline writeups
 results/*.html        one charted report per load test, beside its writeup
 ```
@@ -713,6 +805,14 @@ like-for-like. Say which mechanism produced each number.
 collects NULLs in a partition of their own.
 
 ## Reference numbers
+
+TSBS through the VictoriaMetrics edge, 2026-09-24 (`main@f4303d0`, the
+pushdown stack): **every `cpu-only` query type answers at scale 100 in 0.7 to
+1.8 s; at scale 1,000 `double-groupby-5` times out at 4 workers and
+`double-groupby-all` OOM-kills a 3 GiB query pod.** Load: 40k samples/s at 8
+writers, 77k at 32. A floor of about 0.7 s per query dominates the light
+types; every sealed file holds every metric name, so no `name` predicate skips a file
+([results/2026-09-24-tsbs-victoriametrics.md](results/2026-09-24-tsbs-victoriametrics.md)).
 
 The one billion row challenge, 2026-08-22: **1,000,000,000 two-column rows in
 113.3 s (8,825,572 rows/s, 352 MiB/s)** at 16 workers with zero refusals and

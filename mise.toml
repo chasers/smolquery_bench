@@ -95,6 +95,11 @@ description = "Tail bench: the last 100 events per project, distributed vs singl
 env = { BENCHES = "tail" }
 run = "elixir scripts/loadgen.exs sweep"
 
+[tasks.bench-tsbs]
+description = "TSBS cpu-only through the cluster's VictoriaMetrics edge: load once, query per build (TSBS_SCALES, TSBS_PHASES=load,query|query, TSBS_LABEL)"
+env = { BENCHES = "tsbs" }
+run = "elixir scripts/loadgen.exs sweep"
+
 [tasks.bench-all]
 description = "All three benches in order: ingest, then pruning, then compaction"
 env = { BENCHES = "ingest,pruning,compaction" }
@@ -119,3 +124,25 @@ run = "elixir scripts/loadgen.exs ssh"
 [tasks.bench-down]
 description = "Terminate the load generator"
 run = "elixir scripts/loadgen.exs down"
+
+# ── TSBS against one local node's VictoriaMetrics edge ───────────────────────
+
+[tasks.tsbs-setup]
+description = "Install the TSBS commands and build tools/tsbsrw into $TSBS_DIR/bin (default ~/tsbs)"
+run = "elixir scripts/tsbs.exs setup"
+
+[tasks.tsbs-build]
+description = "Prod-build a smolquery ref as a worktree (usage: mise run tsbs-build -- before origin/main)"
+run = "elixir scripts/tsbs.exs build"
+
+[tasks.tsbs-gen]
+description = "Generate the cpu-only data and query files for SCALE over HOURS"
+run = "elixir scripts/tsbs.exs gen"
+
+[tasks.tsbs-run]
+description = "Start a build, load through remote write, drain, verify, query, stop (usage: mise run tsbs-run -- before)"
+run = "elixir scripts/tsbs.exs run"
+
+[tasks.tsbs-report]
+description = "Markdown tables for LABELS at SCALE from results/raw-tsbs"
+run = "elixir scripts/tsbs.exs report"

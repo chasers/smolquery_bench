@@ -88,7 +88,7 @@ defmodule Bench do
   defp default_clustering("onebrc" <> _), do: ["station"]
   defp default_clustering(_table), do: ["project_id", "timestamp"]
 
-  @bench_types ~w(ingest attrs tail pruning compaction onebrc)
+  @bench_types ~w(ingest attrs tail pruning compaction onebrc tsbs)
 
   @doc """
   The bench types to run, from `BENCHES`, as a comma-separated list.
